@@ -346,7 +346,7 @@ fn lint_flags_unannotated_calls_and_honours_ignore() {
     let t = fixture();
     std::fs::write(
         t.path().join("src/raw.ts"),
-        "import { writeFileSync } from \"node:fs\";\nexport async function f() {\n  const r = await fetch(\"https://api.stripe.com/v1/charges\");\n  writeFileSync(\"/tmp/x\", \"a\");\n  const k = process.env.STRIPE_API_KEY;\n  const m = \"fetch(not code)\"; // fetch(also not code)\n}\n",
+        "import { writeFileSync } from \"node:fs\";\nexport async function f() {\n  const r = await fetch(\"https://api.stripe.com/v1/charges\");\n  writeFileSync(\"/srv/x\", \"a\");\n  const k = process.env.STRIPE_API_KEY;\n  const m = \"fetch(not code)\"; // fetch(also not code)\n  writeFileSync(\"/tmp/y\", \"baseline\");\n  obj.fetch(\"relative\");\n}\n",
     )
     .unwrap();
     let o = run(t.path(), &["lint"]);
@@ -365,6 +365,9 @@ fn lint_flags_unannotated_calls_and_honours_ignore() {
         !s.contains("src/raw.ts:6"),
         "strings/comments must not match: {s}"
     );
+    assert!(!s.contains("src/raw.ts:7"), "/tmp is covered by the sandbox baseline: {s}");
+    assert!(!s.contains("src/raw.ts:8"), "obj.fetch is a method, not the global fetch: {s}");
+    assert!(s.contains("outside the sandbox baseline (/tmp) and every declared fs write root"), "{s}");
     assert_eq!(
         run(t.path(), &["lint", "--deny-warnings"]).status.code(),
         Some(1)
@@ -373,7 +376,7 @@ fn lint_flags_unannotated_calls_and_honours_ignore() {
     // Annotate -> clean.
     std::fs::write(
         t.path().join("src/raw.ts"),
-        "// @openshell ignore kind=fs reason=\"tmp scratch\" scope=file\n// @openshell egress api.stripe.com:443 reason=\"charges\"\n// @openshell provider STRIPE_API_KEY\nimport { writeFileSync } from \"node:fs\";\nexport async function f() {\n  const r = await fetch(\"https://api.stripe.com/v1/charges\");\n  writeFileSync(\"/tmp/x\", \"a\");\n  const k = process.env.STRIPE_API_KEY;\n}\n",
+        "// @openshell ignore kind=fs reason=\"tmp scratch\" scope=file\n// @openshell egress api.stripe.com:443 reason=\"charges\"\n// @openshell provider STRIPE_API_KEY\nimport { writeFileSync } from \"node:fs\";\nexport async function f() {\n  const r = await fetch(\"https://api.stripe.com/v1/charges\");\n  writeFileSync(\"/srv/x\", \"a\");\n  const k = process.env.STRIPE_API_KEY;\n}\n",
     )
     .unwrap();
     let o = run(t.path(), &["lint", "--deny-warnings"]);
@@ -383,11 +386,11 @@ fn lint_flags_unannotated_calls_and_honours_ignore() {
 #[test]
 fn lint_python_go_shell_call_sites_and_test_files_excluded() {
     let t = fixture();
-    std::fs::write(t.path().join("src/x.py"), "import requests, subprocess\nrequests.get(\"https://example.org/a\")\nopen(\"out.txt\", \"w\").write(\"x\")\nopen(\"in.txt\").read()\nsubprocess.run([\"git\", \"pull\"])\n").unwrap();
-    std::fs::write(t.path().join("cmd/x.go"), "package main\nfunc f() { http.Get(\"https://example.net/\"); os.WriteFile(\"a\", nil, 0o644); _ = os.Getenv(\"DB_PASSWORD\") }\n").unwrap();
+    std::fs::write(t.path().join("src/x.py"), "import requests, subprocess\nrequests.get(\"https://api.acme-a.dev/a\")\nopen(\"/srv/out.txt\", \"w\").write(\"x\")\nopen(\"in.txt\").read()\nsubprocess.run([\"git\", \"pull\"])\n").unwrap();
+    std::fs::write(t.path().join("cmd/x.go"), "package main\nfunc f() { http.Get(\"https://api.acme-b.dev/\"); os.WriteFile(\"/srv/a\", nil, 0o644); _ = os.Getenv(\"DB_PASSWORD\") }\n").unwrap();
     std::fs::write(
         t.path().join("scripts/x.sh"),
-        "curl -fsSL https://example.com/i.sh > /opt/i.sh\necho hi > /dev/null\nmkdir -p /opt/a\n",
+        "curl -fsSL https://dl.acme-c.dev/i.sh > /opt/i.sh\necho hi > /dev/null\nmkdir -p /opt/a\n",
     )
     .unwrap();
     std::fs::create_dir_all(t.path().join("src/__tests__")).unwrap();
@@ -593,4 +596,140 @@ fn diff_logs_write_places_directives_and_is_idempotent() {
     let o = run(t.path(), &["diff-logs", log.to_str().unwrap(), "--json"]);
     let v: serde_json::Value = serde_json::from_str(&out(&o)).unwrap();
     assert!(v["suggestions"].as_array().unwrap().iter().all(|s| s["kind"] == "manual"), "{}", out(&o));
+}
+
+// ---- tree-sitter lint -----------------------------------------------------------------------------------------------
+
+#[test]
+fn lint_ast_classifies_fs_write_paths_and_summarises_dynamic_ones() {
+    let t = fixture();
+    // sample declares `fs write /workspace/data`; write under it, under /tmp, to a temp dir, outside, and dynamically
+    std::fs::write(
+        t.path().join("src/w.ts"),
+        "import fs from \"node:fs\";\nimport path from \"node:path\";\nimport os from \"node:os\";\nexport function f(id: string, dir: string) {\n  fs.writeFileSync(\"/workspace/data/a\", \"x\");\n  fs.writeFileSync(path.join(os.tmpdir(), \"b\"), \"x\");\n  fs.writeFileSync(`/workspace/data/${id}`, \"x\");\n  fs.writeFileSync(`/var/lib/app/${id}`, \"x\");\n  fs.mkdirSync(path.join(\"/srv/app\", id));\n  fs.writeFileSync(path.join(dir, \"c\"), \"x\");\n  fs.writeFileSync(dir + \"/d\", \"x\");\n}\n",
+    )
+    .unwrap();
+    let s = out(&run(t.path(), &["lint"]));
+    assert!(!s.contains("src/w.ts:5") && !s.contains("src/w.ts:6") && !s.contains("src/w.ts:7"), "{s}");
+    assert!(s.contains("src/w.ts:8: warning[fs]") && s.contains("/var/lib/app/"), "{s}");
+    assert!(s.contains("src/w.ts:9: warning[fs]") && s.contains("/srv/app"), "{s}");
+    // the two dynamic writes are one repo-level info, not warnings
+    assert!(!s.contains("src/w.ts:10") && !s.contains("src/w.ts:11"), "{s}");
+    assert!(s.contains("info[fs]") && s.contains("2 filesystem write(s)"), "{s}");
+    let o = run(t.path(), &["lint", "--json"]);
+    assert!(out(&o).contains("\"file\": \".\""), "{}", out(&o));
+}
+
+#[test]
+fn lint_ast_without_any_fs_root_warns_once_per_file() {
+    let t = fixture();
+    let toml = std::fs::read_to_string(t.path().join("openshell-annotate.toml")).unwrap();
+    std::fs::write(t.path().join("openshell-annotate.toml"), toml).unwrap();
+    // drop the fs directive from the sample so no root is declared
+    let mut stripped = false;
+    for e in walk(t.path()) {
+        if let Ok(txt) = std::fs::read_to_string(&e) {
+            if txt.contains("@openshell fs write") {
+                let kept: Vec<&str> = txt.lines().filter(|l| !l.contains("@openshell fs write")).collect();
+                std::fs::write(&e, kept.join("\n") + "\n").unwrap();
+                stripped = true;
+            }
+        }
+    }
+    assert!(stripped);
+    std::fs::write(t.path().join("src/w.py"), "def f(p, q):\n    open(p, \"w\")\n    open(q, \"wb\")\n    open(p)\n").unwrap();
+    let s = out(&run(t.path(), &["lint"]));
+    let n = s.lines().filter(|l| l.starts_with("src/w.py") && l.contains("warning[fs]")).count();
+    assert_eq!(n, 1, "{s}");
+    assert!(s.contains("2 filesystem write(s) with non-literal paths"), "{s}");
+}
+
+fn walk(d: &Path) -> Vec<PathBuf> {
+    let mut v = vec![];
+    for e in std::fs::read_dir(d).unwrap() {
+        let p = e.unwrap().path();
+        if p.is_dir() {
+            v.extend(walk(&p));
+        } else {
+            v.push(p);
+        }
+    }
+    v
+}
+
+#[test]
+fn lint_ast_resolves_urls_against_declared_egress_and_reads_python_go_shell_syntax() {
+    let t = fixture();
+    // huggingface.co is annotated in the sample: a call with that literal URL is covered even without a nearby directive
+    std::fs::write(
+        t.path().join("src/u.py"),
+        "import requests, os\nrequests.get(\"https://huggingface.co/api/models\")\nrequests.get(\"https://api.acme-z.dev/x\")\nurl = \"https://cdn.acme-y.dev/f\"\nw = os.environ.get(\"MY_API_KEY\")\nopen(\"/tmp/f\", \"w\")\nopen(\"/tmp/f\", mode=\"rb\")\nx = \"requests.get('https://nope.test')\"\n",
+    )
+    .unwrap();
+    let s = out(&run(t.path(), &["lint"]));
+    assert!(!s.contains("src/u.py:2"), "{s}");
+    assert!(s.contains("src/u.py:3: warning[net]") && s.contains("api.acme-z.dev:443"), "{s}");
+    assert!(s.contains("src/u.py:4: info[net]: URL literal to cdn.acme-y.dev:443"), "{s}");
+    assert!(s.contains("src/u.py:5: warning[env]") && s.contains("MY_API_KEY"), "{s}");
+    assert!(!s.contains("src/u.py:6") && !s.contains("src/u.py:7") && !s.contains("src/u.py:8"), "{s}");
+    // shell: expansions and redirections come from the AST
+    std::fs::write(t.path().join("scripts/y.sh"), "echo \"$MY_SECRET_TOKEN\" > \"$TMPDIR/x\"\nwget -q https://dl.acme-q.dev/a.tgz -O /srv/a.tgz\nls 2>&1 >&2\n").unwrap();
+    let s = out(&run(t.path(), &["lint"]));
+    assert!(s.contains("scripts/y.sh:1: warning[env]") && s.contains("MY_SECRET_TOKEN"), "{s}");
+    assert!(!s.contains("scripts/y.sh:1: warning[fs]"), "TMPDIR target is a temp path: {s}");
+    assert!(s.contains("scripts/y.sh:2: warning[net]: curl/wget"), "{s}");
+    assert!(!s.contains("scripts/y.sh:3"), "{s}");
+}
+
+#[test]
+fn lint_regex_engine_is_still_available() {
+    let t = fixture();
+    let toml = std::fs::read_to_string(t.path().join("openshell-annotate.toml")).unwrap();
+    std::fs::write(t.path().join("openshell-annotate.toml"), format!("{toml}\n[lint]\nengine = \"regex\"\n")).unwrap();
+    std::fs::write(t.path().join("src/r.ts"), "export const a = fetch(\"https://api.acme-r.dev/x\");\n").unwrap();
+    let s = out(&run(t.path(), &["lint"]));
+    assert!(s.contains("src/r.ts:1: warning[net]: fetch()"), "{s}");
+}
+
+#[test]
+fn lint_ast_follows_fs_imports_and_aliases() {
+    let t = fixture();
+    std::fs::write(
+        t.path().join("src/imp.ts"),
+        "import { mkdir as mk, readFile } from \"node:fs/promises\";\nconst { rename } = require(\"fs\");\nexport async function f() {\n  await mk(\"/srv/a\");\n  await readFile(\"/srv/b\");\n  rename(\"/srv/c\", \"/srv/d\");\n  const mkdir = () => 1;\n  mkdir();\n}\n",
+    )
+    .unwrap();
+    std::fs::write(t.path().join("src/noimp.ts"), "function mkdir(p: string) {}\nmkdir(\"/srv/z\");\n").unwrap();
+    let s = out(&run(t.path(), &["lint"]));
+    assert!(s.contains("src/imp.ts:4: warning[fs]") && s.contains("(mkdir) to /srv/a"), "{s}");
+    assert!(!s.contains("src/imp.ts:5"), "{s}");
+    assert!(s.contains("src/imp.ts:6: warning[fs]") && s.contains("to /srv/d"), "{s}");
+    assert!(!s.contains("src/noimp.ts"), "a local function named mkdir is not fs.mkdir: {s}");
+}
+
+#[test]
+fn profiles_dirs_lists_several_directories_and_profiles_dir_still_works() {
+    let t = fixture();
+    let base = out(&run(t.path(), &["generate", "--providers-out", "p.json", "-o", "policy.yaml"]));
+    let want = std::fs::read_to_string(t.path().join("p.json")).unwrap();
+    let _ = base;
+    // move the profiles to two other directories and list both
+    std::fs::create_dir_all(t.path().join("profiles_a")).unwrap();
+    std::fs::create_dir_all(t.path().join("profiles_b")).unwrap();
+    for (i, e) in std::fs::read_dir(t.path().join("profiles")).unwrap().enumerate() {
+        let e = e.unwrap();
+        let dir = if i % 2 == 0 { "profiles_a" } else { "profiles_b" };
+        std::fs::create_dir_all(t.path().join(dir)).unwrap();
+        std::fs::rename(e.path(), t.path().join(dir).join(e.file_name())).unwrap();
+    }
+    std::fs::remove_dir_all(t.path().join("profiles")).unwrap();
+    let toml = std::fs::read_to_string(t.path().join("openshell-annotate.toml")).unwrap();
+    std::fs::write(
+        t.path().join("openshell-annotate.toml"),
+        toml.replace("profiles_dir = \"profiles\"", "profiles_dirs = [\"profiles_a\", \"profiles_b\"]"),
+    )
+    .unwrap();
+    let o = run(t.path(), &["generate", "--providers-out", "p2.json", "-o", "policy2.yaml"]);
+    assert!(o.status.success(), "{}", err(&o));
+    assert_eq!(std::fs::read_to_string(t.path().join("p2.json")).unwrap(), want);
 }

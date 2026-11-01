@@ -1,0 +1,669 @@
+//! Tree-sitter call-site extraction for JavaScript/TypeScript, Python, Go and shell.
+//!
+//! Unlike the regex engine this sees real syntax: `fetch` as a method of another object is not the global fetch, a string that
+//! merely contains `open(` is not a call, `open(p, "r")` is not a write, and the *path argument* of a write can be classified
+//! (absolute literal, temp directory, or dynamic) so the filesystem lint only speaks when it can say something useful.
+
+use crate::lexer::Language;
+use regex::Regex;
+use std::sync::OnceLock;
+use tree_sitter::{Node, Parser};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Pth {
+    /// Absolute path (or the absolute literal prefix of a computed path such as `` `/data/${id}` ``).
+    Literal(String),
+    /// Built from a temp-dir expression: covered by the sandbox baseline (`/tmp`).
+    Temp,
+    /// Relative, computed, or otherwise not statically known.
+    Dynamic,
+}
+
+#[derive(Debug, Clone)]
+pub struct Site {
+    pub line: usize,
+    /// `net` | `fs` | `env` | `exec`
+    pub cat: &'static str,
+    pub what: String,
+    /// Environment variable name (cat = env) when it is a literal.
+    pub env: Option<String>,
+    /// `host:port` pairs found in the URL-ish arguments (net).
+    pub urls: Vec<String>,
+    pub path: Option<Pth>,
+    /// true: a call; false: a bare URL literal.
+    pub call: bool,
+}
+
+fn temp_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?i)tmp|tempdir|tempfile|temp_|mkdtemp|mktemp|mkstemp|createtemp|\btemp\b").unwrap())
+}
+
+fn txt<'a>(n: Node, src: &'a str) -> &'a str {
+    &src[n.byte_range()]
+}
+
+fn line_of(n: Node) -> usize {
+    n.start_position().row + 1
+}
+
+const STRING_KINDS: &[&str] = &[
+    "string",
+    "template_string",
+    "interpreted_string_literal",
+    "raw_string_literal",
+    "raw_string",
+];
+const SUBST_KINDS: &[&str] = &[
+    "template_substitution",
+    "interpolation",
+    "expansion",
+    "simple_expansion",
+    "command_substitution",
+];
+
+fn has_subst(n: Node) -> bool {
+    let mut c = n.walk();
+    let r = n.named_children(&mut c).any(|k| SUBST_KINDS.contains(&k.kind()));
+    r
+}
+
+fn strip_quotes(t: &str) -> String {
+    let t = t.trim_start_matches(|c: char| matches!(c, 'r' | 'R' | 'b' | 'B' | 'f' | 'F' | 'u' | 'U'));
+    for q in ["\"\"\"", "'''"] {
+        if t.len() >= 6 && t.starts_with(q) && t.ends_with(q) {
+            return t[3..t.len() - 3].to_string();
+        }
+    }
+    let first = t.chars().next();
+    if t.len() >= 2 && matches!(first, Some('"' | '\'' | '`')) && t.ends_with(first.unwrap()) {
+        return t[1..t.len() - 1].to_string();
+    }
+    t.to_string()
+}
+
+/// The value of a string literal node without substitutions.
+fn str_lit(n: Node, src: &str) -> Option<String> {
+    if STRING_KINDS.contains(&n.kind()) && !has_subst(n) {
+        Some(strip_quotes(txt(n, src)))
+    } else {
+        None
+    }
+}
+
+fn named_args<'t>(call: Node<'t>) -> Vec<Node<'t>> {
+    let Some(a) = call.child_by_field_name("arguments") else { return vec![] };
+    let mut c = a.walk();
+    let v = a
+        .named_children(&mut c)
+        .filter(|k| k.kind() != "comment")
+        .collect();
+    v
+}
+
+fn under(p: &str, root: &str) -> bool {
+    let r = root.trim_end_matches('/');
+    p == r || p.starts_with(&format!("{r}/")) || r.is_empty()
+}
+
+/// Classify the path-valued argument of a write.
+fn classify_path(n: Node, src: &str) -> Pth {
+    if let Some(s) = str_lit(n, src) {
+        return if s.starts_with('/') { Pth::Literal(s) } else { Pth::Dynamic };
+    }
+    let t = txt(n, src);
+    // `path.join("/abs", x)` / `os.path.join("/abs", x)` / `Path("/abs")`: the first literal argument decides.
+    if matches!(n.kind(), "call_expression" | "call") {
+        if let Some(first) = named_args(n).first() {
+            if let Some(s) = str_lit(*first, src) {
+                if s.starts_with('/') {
+                    return Pth::Literal(s);
+                }
+            }
+        }
+    }
+    // template literal / f-string with an absolute literal head
+    if matches!(n.kind(), "template_string" | "string") {
+        let body = strip_quotes(t);
+        if let Some(i) = body.find("${").or_else(|| body.find('{')) {
+            if body.starts_with('/') && i > 1 {
+                return Pth::Literal(body[..i].to_string());
+            }
+        }
+    }
+    if temp_re().is_match(t) {
+        return Pth::Temp;
+    }
+    Pth::Dynamic
+}
+
+pub fn is_covered_path(p: &Pth, fs_roots: &[String]) -> bool {
+    match p {
+        Pth::Temp => true,
+        Pth::Dynamic => false,
+        Pth::Literal(s) => {
+            under(s, "/tmp")
+                || s == "/dev/null"
+                || fs_roots.iter().any(|r| under(s, r))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+
+fn push(out: &mut Vec<Site>, n: Node, cat: &'static str, what: impl Into<String>) -> usize {
+    out.push(Site {
+        line: line_of(n),
+        cat,
+        what: what.into(),
+        env: None,
+        urls: vec![],
+        path: None,
+        call: true,
+    });
+    out.len() - 1
+}
+
+fn urls_in(nodes: &[Node], src: &str) -> Vec<String> {
+    let mut v = Vec::new();
+    for n in nodes.iter().take(2) {
+        for h in crate::lint::url_hosts(txt(*n, src)) {
+            if !v.contains(&h) {
+                v.push(h);
+            }
+        }
+    }
+    v
+}
+
+/// Parse and extract sites. `None` when the grammar cannot be loaded or parsing fails outright.
+pub fn sites(lang: Language, rel: &str, text: &str) -> Option<Vec<Site>> {
+    let mut parser = Parser::new();
+    let l: tree_sitter::Language = match lang {
+        Language::JavaScript => match rel.rsplit('.').next().unwrap_or("") {
+            "ts" | "mts" | "cts" => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            "tsx" => tree_sitter_typescript::LANGUAGE_TSX.into(),
+            _ => tree_sitter_javascript::LANGUAGE.into(),
+        },
+        Language::Python => tree_sitter_python::LANGUAGE.into(),
+        Language::Go => tree_sitter_go::LANGUAGE.into(),
+        Language::Shell => tree_sitter_bash::LANGUAGE.into(),
+    };
+    parser.set_language(&l).ok()?;
+    let tree = parser.parse(text, None)?;
+    let mut out = Vec::new();
+    let mut imp = FsImports::new();
+    let mut cur = tree.root_node().walk();
+    'outer: loop {
+        let n = cur.node();
+        match lang {
+            Language::JavaScript => js(n, text, &mut out, &mut imp),
+            Language::Python => py(n, text, &mut out),
+            Language::Go => go(n, text, &mut out),
+            Language::Shell => sh(n, text, &mut out),
+        }
+        url_literal(n, text, &mut out);
+        if cur.goto_first_child() {
+            continue;
+        }
+        loop {
+            if cur.goto_next_sibling() {
+                continue 'outer;
+            }
+            if !cur.goto_parent() {
+                break 'outer;
+            }
+        }
+    }
+    Some(out)
+}
+
+fn url_literal(n: Node, src: &str, out: &mut Vec<Site>) {
+    let k = n.kind();
+    if !(STRING_KINDS.contains(&k) || k == "word") {
+        return;
+    }
+    let t = txt(n, src);
+    if !t.contains("://") || t.len() > 600 {
+        return;
+    }
+    let hosts = crate::lint::url_hosts(t);
+    if !hosts.is_empty() {
+        let i = push(out, n, "net", "URL literal");
+        out[i].urls = hosts;
+        out[i].call = false;
+    }
+}
+
+// ---- JavaScript / TypeScript -------------------------------------------------------------------------------------------
+
+fn js_dotted(n: Node, src: &str) -> Option<String> {
+    match n.kind() {
+        "identifier" | "property_identifier" | "this" | "shorthand_property_identifier" => Some(txt(n, src).to_string()),
+        "member_expression" => {
+            let o = js_dotted(n.child_by_field_name("object")?, src)?;
+            let p = n.child_by_field_name("property")?;
+            Some(format!("{o}.{}", txt(p, src)))
+        }
+        "non_null_expression" | "parenthesized_expression" | "as_expression" => js_dotted(n.named_child(0)?, src),
+        _ => None,
+    }
+}
+
+fn js_member_parts(n: Node, src: &str) -> Option<(Option<String>, String)> {
+    if n.kind() == "member_expression" {
+        let obj = n.child_by_field_name("object").and_then(|o| js_dotted(o, src));
+        let prop = txt(n.child_by_field_name("property")?, src).to_string();
+        Some((obj, prop))
+    } else {
+        None
+    }
+}
+
+const JS_FS_BARE: &[&str] = &[
+    "writeFile", "writeFileSync", "appendFile", "appendFileSync", "createWriteStream", "mkdirSync",
+    "mkdtemp", "mkdtempSync", "copyFileSync", "rmSync", "unlinkSync", "renameSync",
+];
+const JS_FS_MEMBER: &[&str] = &[
+    "writeFile", "writeFileSync", "appendFile", "appendFileSync", "createWriteStream", "mkdir", "mkdirSync",
+    "mkdtemp", "mkdtempSync", "unlink", "unlinkSync", "rename", "renameSync", "copyFile", "copyFileSync", "rm",
+    "rmSync", "cp", "cpSync", "truncate", "truncateSync", "symlink", "symlinkSync", "outputFile", "outputFileSync",
+    "ensureDir", "emptyDir", "move", "copy",
+];
+const JS_FS_TWO_PATH: &[&str] = &["copyFile", "copyFileSync", "rename", "renameSync", "cp", "cpSync", "symlink", "symlinkSync", "move", "copy"];
+
+fn js_fs_object(o: &str) -> bool {
+    let last = o.rsplit('.').next().unwrap_or(o).to_ascii_lowercase();
+    matches!(last.as_str(), "fs" | "fsp" | "fspromises" | "promises" | "fse" | "fsextra" | "fsx" | "nodefs")
+        || last.ends_with("fs")
+        || o.to_ascii_lowercase().ends_with("fs.promises")
+}
+
+/// Local names bound to functions of node's fs modules (`import { mkdir as mk } from "node:fs/promises"`).
+type FsImports = std::collections::BTreeMap<String, String>;
+
+fn is_fs_module(m: &str) -> bool {
+    matches!(m.trim_start_matches("node:"), "fs" | "fs/promises" | "fs-extra" | "graceful-fs")
+}
+
+fn js(n: Node, src: &str, out: &mut Vec<Site>, imp: &mut FsImports) {
+    match n.kind() {
+        "import_statement" => {
+            let Some(m) = n.child_by_field_name("source").and_then(|x| str_lit(x, src)) else { return };
+            if !is_fs_module(&m) {
+                return;
+            }
+            let mut stack = vec![n];
+            while let Some(x) = stack.pop() {
+                if x.kind() == "import_specifier" {
+                    if let Some(name) = x.child_by_field_name("name") {
+                        let local = x.child_by_field_name("alias").unwrap_or(name);
+                        imp.insert(txt(local, src).to_string(), txt(name, src).to_string());
+                    }
+                } else {
+                    let mut c = x.walk();
+                    stack.extend(x.named_children(&mut c));
+                }
+            }
+        }
+        "new_expression" => {
+            let Some(c) = n.child_by_field_name("constructor") else { return };
+            let Some(d) = js_dotted(c, src) else { return };
+            let what = match d.as_str() {
+                "WebSocket" | "ws.WebSocket" => "WebSocket client",
+                "EventSource" => "EventSource",
+                "XMLHttpRequest" => "XMLHttpRequest",
+                _ => return,
+            };
+            let args = named_args(n);
+            let i = push(out, n, "net", what);
+            out[i].urls = urls_in(&args, src);
+        }
+        "call_expression" => {
+            let Some(f) = n.child_by_field_name("function") else { return };
+            let args = named_args(n);
+            let dotted = js_dotted(f, src);
+            let parts = js_member_parts(f, src);
+            if let Some(d) = &dotted {
+                let net = match d.as_str() {
+                    "fetch" | "globalThis.fetch" | "window.fetch" | "self.fetch" | "undici.fetch" | "undici.request" => Some("fetch()"),
+                    "http.request" | "http.get" | "https.request" | "https.get" | "http2.connect" | "httpRequest" | "httpsRequest" => Some("node http(s) request"),
+                    "net.connect" | "net.createConnection" | "tls.connect" => Some("raw socket"),
+                    x if x == "axios" || x.starts_with("axios.") => Some("axios"),
+                    _ => None,
+                };
+                if let Some(w) = net {
+                    let i = push(out, n, "net", w);
+                    out[i].urls = urls_in(&args, src);
+                }
+                let exec = matches!(d.as_str(), "spawn" | "spawnSync" | "execFile" | "execFileSync" | "execSync" | "fork" | "execa" | "execaSync")
+                    || matches!(parts.as_ref().and_then(|p| p.0.as_deref()), Some("child_process" | "cp" | "childProcess" | "execa" | "node:child_process"));
+                if exec {
+                    push(out, n, "exec", "subprocess");
+                }
+            }
+            // fs writes
+            let fs_name = match (&parts, &dotted) {
+                (Some((Some(obj), name)), _) if js_fs_object(obj) && JS_FS_MEMBER.contains(&name.as_str()) => Some(name.clone()),
+                (None, Some(d)) if imp.get(d).map_or(false, |o| JS_FS_MEMBER.contains(&o.as_str())) => imp.get(d).cloned(),
+                (None, Some(d)) if JS_FS_BARE.contains(&d.as_str()) => Some(d.clone()),
+                _ => None,
+            };
+            if let Some(name) = fs_name {
+                let idx = if JS_FS_TWO_PATH.contains(&name.as_str()) { 1.min(args.len().saturating_sub(1)) } else { 0 };
+                let p = args.get(idx).map(|a| classify_path(*a, src)).unwrap_or(Pth::Dynamic);
+                let i = push(out, n, "fs", format!("filesystem write ({name})"));
+                out[i].path = Some(p);
+            }
+        }
+        "member_expression" => {
+            // process.env.NAME
+            if let Some(o) = n.child_by_field_name("object") {
+                if js_dotted(o, src).as_deref() == Some("process.env") {
+                    if let Some(p) = n.child_by_field_name("property") {
+                        let i = push(out, n, "env", "environment read");
+                        out[i].env = Some(txt(p, src).to_string());
+                    }
+                }
+            }
+        }
+        "subscript_expression" => {
+            if let (Some(o), Some(ix)) = (n.child_by_field_name("object"), n.child_by_field_name("index")) {
+                if js_dotted(o, src).as_deref() == Some("process.env") {
+                    let i = push(out, n, "env", "environment read");
+                    out[i].env = str_lit(ix, src);
+                }
+            }
+        }
+        "variable_declarator" => {
+            // const { A, B: b } = process.env
+            let (Some(name), Some(val)) = (n.child_by_field_name("name"), n.child_by_field_name("value")) else { return };
+            // const { mkdir } = require("node:fs/promises")
+            let req = if val.kind() == "await_expression" { val.named_child(0).unwrap_or(val) } else { val };
+            if name.kind() == "object_pattern" && req.kind() == "call_expression" {
+                let is_req = req.child_by_field_name("function").map_or(false, |f| matches!(txt(f, src), "require" | "import"));
+                if is_req && named_args(req).first().and_then(|a| str_lit(*a, src)).map_or(false, |m| is_fs_module(&m)) {
+                    let mut c = name.walk();
+                    for k in name.named_children(&mut c) {
+                        match k.kind() {
+                            "shorthand_property_identifier_pattern" => { imp.insert(txt(k, src).to_string(), txt(k, src).to_string()); }
+                            "pair_pattern" => {
+                                if let (Some(key), Some(v)) = (k.child_by_field_name("key"), k.child_by_field_name("value")) {
+                                    imp.insert(txt(v, src).to_string(), txt(key, src).to_string());
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            if name.kind() == "object_pattern" && js_dotted(val, src).as_deref() == Some("process.env") {
+                let mut c = name.walk();
+                for k in name.named_children(&mut c) {
+                    let key = match k.kind() {
+                        "shorthand_property_identifier_pattern" => Some(txt(k, src).to_string()),
+                        "pair_pattern" => k.child_by_field_name("key").map(|x| txt(x, src).to_string()),
+                        "object_assignment_pattern" => k.child_by_field_name("left").map(|x| txt(x, src).to_string()),
+                        _ => None,
+                    };
+                    if let Some(key) = key {
+                        let i = push(out, n, "env", "environment read");
+                        out[i].env = Some(key);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+// ---- Python ------------------------------------------------------------------------------------------------------------
+
+fn py_dotted(n: Node, src: &str) -> Option<String> {
+    match n.kind() {
+        "identifier" => Some(txt(n, src).to_string()),
+        "attribute" => {
+            let o = py_dotted(n.child_by_field_name("object")?, src)?;
+            Some(format!("{o}.{}", txt(n.child_by_field_name("attribute")?, src)))
+        }
+        _ => None,
+    }
+}
+
+fn py_kwarg<'t>(args: &[Node<'t>], name: &str, src: &str) -> Option<Node<'t>> {
+    args.iter().find_map(|a| {
+        if a.kind() == "keyword_argument" && txt(a.child_by_field_name("name")?, src) == name {
+            a.child_by_field_name("value")
+        } else {
+            None
+        }
+    })
+}
+
+fn py(n: Node, src: &str, out: &mut Vec<Site>) {
+    match n.kind() {
+        "call" => {
+            let Some(f) = n.child_by_field_name("function") else { return };
+            let args = named_args(n);
+            let dotted = py_dotted(f, src);
+            let last = if f.kind() == "attribute" { f.child_by_field_name("attribute").map(|x| txt(x, src).to_string()) } else { dotted.clone() };
+            if let Some(d) = &dotted {
+                let net = if let Some(rest) = d.strip_prefix("requests.") {
+                    matches!(rest, "get" | "post" | "put" | "patch" | "delete" | "head" | "request" | "Session").then_some("requests")
+                } else if let Some(rest) = d.strip_prefix("httpx.") {
+                    matches!(rest, "get" | "post" | "put" | "patch" | "delete" | "head" | "request" | "stream" | "Client" | "AsyncClient").then_some("httpx")
+                } else if matches!(d.as_str(), "urllib.request.urlopen" | "urllib.request.Request" | "urlopen" | "request.urlopen") {
+                    Some("urllib")
+                } else if matches!(d.as_str(), "aiohttp.ClientSession") {
+                    Some("aiohttp")
+                } else if matches!(d.as_str(), "socket.create_connection" | "websockets.connect" | "websocket.create_connection") {
+                    Some("raw socket")
+                } else {
+                    None
+                };
+                if let Some(w) = net {
+                    let i = push(out, n, "net", w);
+                    out[i].urls = urls_in(&args, src);
+                }
+                if d.starts_with("subprocess.") || matches!(d.as_str(), "os.system" | "os.popen") {
+                    push(out, n, "exec", "subprocess");
+                }
+                if matches!(d.as_str(), "os.getenv" | "os.environ.get" | "environ.get" | "getenv") {
+                    let i = push(out, n, "env", "environment read");
+                    out[i].env = args.first().and_then(|a| str_lit(*a, src));
+                }
+                // fs
+                let is_open = matches!(d.as_str(), "open" | "io.open" | "codecs.open");
+                if is_open {
+                    let mode = args.get(1).copied().or_else(|| py_kwarg(&args, "mode", src));
+                    let writes = mode.and_then(|m| str_lit(m, src)).map_or(false, |m| m.chars().any(|c| matches!(c, 'w' | 'a' | 'x' | '+')));
+                    if writes {
+                        let p = args.first().map(|a| classify_path(*a, src)).unwrap_or(Pth::Dynamic);
+                        let i = push(out, n, "fs", "open() for writing");
+                        out[i].path = Some(p);
+                    }
+                } else if let Some(rest) = d.strip_prefix("shutil.") {
+                    if matches!(rest, "copy" | "copy2" | "copyfile" | "copytree" | "move" | "rmtree") {
+                        let idx = if rest == "rmtree" { 0 } else { 1.min(args.len().saturating_sub(1)) };
+                        let p = args.get(idx).map(|a| classify_path(*a, src)).unwrap_or(Pth::Dynamic);
+                        let i = push(out, n, "fs", format!("filesystem write (shutil.{rest})"));
+                        out[i].path = Some(p);
+                    }
+                } else if let Some(rest) = d.strip_prefix("os.") {
+                    if matches!(rest, "remove" | "rename" | "replace" | "makedirs" | "mkdir" | "unlink" | "rmdir") {
+                        let idx = if matches!(rest, "rename" | "replace") { 1.min(args.len().saturating_sub(1)) } else { 0 };
+                        let p = args.get(idx).map(|a| classify_path(*a, src)).unwrap_or(Pth::Dynamic);
+                        let i = push(out, n, "fs", format!("filesystem write (os.{rest})"));
+                        out[i].path = Some(p);
+                    }
+                }
+            }
+            if let (Some(l), true) = (&last, f.kind() == "attribute") {
+                if matches!(l.as_str(), "write_text" | "write_bytes") {
+                    let recv = f.child_by_field_name("object");
+                    let p = recv.map(|r| classify_path(r, src)).unwrap_or(Pth::Dynamic);
+                    let i = push(out, n, "fs", format!("filesystem write ({l})"));
+                    out[i].path = Some(p);
+                }
+            }
+        }
+        "subscript" => {
+            if let (Some(v), Some(s)) = (n.child_by_field_name("value"), n.child_by_field_name("subscript")) {
+                if matches!(py_dotted(v, src).as_deref(), Some("os.environ" | "environ")) {
+                    let i = push(out, n, "env", "environment read");
+                    out[i].env = str_lit(s, src);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+// ---- Go ----------------------------------------------------------------------------------------------------------------
+
+fn go_dotted(n: Node, src: &str) -> Option<String> {
+    match n.kind() {
+        "identifier" | "package_identifier" | "field_identifier" => Some(txt(n, src).to_string()),
+        "selector_expression" => {
+            let o = go_dotted(n.child_by_field_name("operand")?, src)?;
+            Some(format!("{o}.{}", txt(n.child_by_field_name("field")?, src)))
+        }
+        _ => None,
+    }
+}
+
+fn go(n: Node, src: &str, out: &mut Vec<Site>) {
+    if n.kind() != "call_expression" {
+        return;
+    }
+    let Some(f) = n.child_by_field_name("function") else { return };
+    let Some(d) = go_dotted(f, src) else { return };
+    let args = named_args(n);
+    let net = match d.as_str() {
+        "http.Get" | "http.Post" | "http.PostForm" | "http.Head" | "http.NewRequest" | "http.NewRequestWithContext" | "http.DefaultClient.Get" | "http.DefaultClient.Do" | "http.DefaultClient.Post" => Some("net/http client"),
+        "net.Dial" | "net.DialTimeout" | "tls.Dial" | "websocket.Dial" | "websocket.DefaultDialer.Dial" => Some("raw socket"),
+        _ => None,
+    };
+    if let Some(w) = net {
+        let i = push(out, n, "net", w);
+        let from = if d == "http.NewRequest" { 1 } else if d == "http.NewRequestWithContext" { 2 } else { 0 };
+        out[i].urls = urls_in(&args[from.min(args.len())..], src);
+    }
+    if matches!(d.as_str(), "os.Getenv" | "os.LookupEnv") {
+        let i = push(out, n, "env", "environment read");
+        out[i].env = args.first().and_then(|a| str_lit(*a, src));
+    }
+    if matches!(d.as_str(), "exec.Command" | "exec.CommandContext") {
+        push(out, n, "exec", "subprocess");
+    }
+    if let Some(name) = d.strip_prefix("os.").or_else(|| d.strip_prefix("ioutil.")) {
+        let write = match name {
+            "WriteFile" | "Create" | "MkdirAll" | "Mkdir" | "MkdirTemp" | "CreateTemp" | "Remove" | "RemoveAll" | "Rename" => true,
+            "OpenFile" => args.get(1).map_or(false, |f| {
+                let t = txt(*f, src);
+                ["O_WRONLY", "O_RDWR", "O_CREATE", "O_APPEND", "O_TRUNC"].iter().any(|k| t.contains(k))
+            }),
+            _ => false,
+        };
+        if write {
+            let idx = if name == "Rename" { 1.min(args.len().saturating_sub(1)) } else { 0 };
+            let p = if matches!(name, "MkdirTemp" | "CreateTemp") {
+                Pth::Temp
+            } else {
+                args.get(idx).map(|a| classify_path(*a, src)).unwrap_or(Pth::Dynamic)
+            };
+            let i = push(out, n, "fs", format!("filesystem write (os.{name})"));
+            out[i].path = Some(p);
+        }
+    }
+}
+
+// ---- Shell -------------------------------------------------------------------------------------------------------------
+
+fn sh_args<'t>(cmd: Node<'t>) -> Vec<Node<'t>> {
+    let mut c = cmd.walk();
+    let v = cmd.children_by_field_name("argument", &mut c).collect();
+    v
+}
+
+fn sh_path(n: Node, src: &str) -> Pth {
+    let t = txt(n, src);
+    let unq = strip_quotes(t);
+    if unq == "-" || unq.parse::<u32>().is_ok() {
+        return Pth::Dynamic;
+    }
+    if unq.starts_with('/') && !unq.contains('$') && !unq.contains('`') {
+        return Pth::Literal(unq);
+    }
+    if let Some(i) = unq.find('$') {
+        if unq.starts_with('/') && i > 1 {
+            return Pth::Literal(unq[..i].to_string());
+        }
+    }
+    if temp_re().is_match(t) {
+        return Pth::Temp;
+    }
+    Pth::Dynamic
+}
+
+fn sh(n: Node, src: &str, out: &mut Vec<Site>) {
+    match n.kind() {
+        "command" => {
+            let Some(nm) = n.child_by_field_name("name") else { return };
+            let name = txt(nm, src).rsplit('/').next().unwrap_or("").to_string();
+            let args = sh_args(n);
+            let first = args.first().map(|a| txt(*a, src).to_string()).unwrap_or_default();
+            let net = match name.as_str() {
+                "curl" | "wget" => Some("curl/wget"),
+                "git" if matches!(first.as_str(), "clone" | "fetch" | "pull" | "push" | "ls-remote") => Some("git remote operation"),
+                "npm" | "pnpm" | "yarn" if matches!(first.as_str(), "install" | "i" | "add" | "ci" | "publish" | "view") => Some("package manager"),
+                "pip" | "pip3" if first == "install" => Some("package manager"),
+                "apt" | "apt-get" if matches!(first.as_str(), "install" | "update") => Some("package manager"),
+                "docker" if matches!(first.as_str(), "pull" | "push") => Some("container registry"),
+                _ => None,
+            };
+            if let Some(w) = net {
+                let i = push(out, n, "net", w);
+                let mut v = Vec::new();
+                for a in &args {
+                    for h in crate::lint::url_hosts(txt(*a, src)) {
+                        if !v.contains(&h) {
+                            v.push(h);
+                        }
+                    }
+                }
+                out[i].urls = v;
+            }
+            if matches!(name.as_str(), "mkdir" | "rm" | "cp" | "mv" | "touch" | "tee" | "chmod" | "chown" | "ln" | "install" | "rsync" | "dd") {
+                let paths: Vec<Node> = args.iter().copied().filter(|a| !txt(*a, src).starts_with('-')).collect();
+                if let Some(last) = paths.last() {
+                    let i = push(out, n, "fs", format!("filesystem write ({name})"));
+                    out[i].path = Some(sh_path(*last, src));
+                }
+            }
+        }
+        "file_redirect" => {
+            let t = txt(n, src).trim_start();
+            let t = t.trim_start_matches(|c: char| c.is_ascii_digit());
+            if !(t.starts_with('>') || t.starts_with("&>")) || t.starts_with(">&") {
+                return;
+            }
+            let Some(d) = n.child_by_field_name("destination") else { return };
+            let dt = strip_quotes(txt(d, src));
+            if matches!(dt.as_str(), "/dev/null" | "/dev/stderr" | "/dev/stdout" | "/dev/tty") || dt.starts_with('&') || dt.parse::<u32>().is_ok() {
+                return;
+            }
+            let i = push(out, n, "fs", "output redirection");
+            out[i].path = Some(sh_path(d, src));
+        }
+        "variable_name" => {
+            let parent_ok = n.parent().map_or(false, |p| matches!(p.kind(), "simple_expansion" | "expansion"));
+            let t = txt(n, src);
+            if parent_ok && t.chars().next().map_or(false, |c| c.is_ascii_uppercase()) {
+                let i = push(out, n, "env", "environment read");
+                out[i].env = Some(t.to_string());
+            }
+        }
+        _ => {}
+    }
+}

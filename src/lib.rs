@@ -1,5 +1,6 @@
 //! openshell-annotate: policy-as-code for OpenShell via `@openshell` source directives.
 pub mod config;
+pub mod ast;
 pub mod diff_logs;
 pub mod directive;
 pub mod drift;

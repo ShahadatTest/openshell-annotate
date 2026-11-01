@@ -76,6 +76,21 @@ pub struct LintConfig {
     /// Directive errors and policy sanity checks always run.
     #[serde(default)]
     pub categories: Vec<String>,
+    /// `treesitter` (default; AST call sites, path-aware fs lint) or `regex` (the original line heuristics).
+    #[serde(default = "engine")]
+    pub engine: String,
+    /// What to do with filesystem writes whose path is not a literal (so they cannot be checked statically):
+    /// `summary` (default; one repo-level info), `info` (one per file), `warn` (one warning per file), `off`.
+    /// With no `@openshell fs write` root declared anywhere these are always one warning per file.
+    #[serde(default = "fs_dynamic")]
+    pub fs_dynamic: String,
+}
+
+fn engine() -> String {
+    "treesitter".into()
+}
+fn fs_dynamic() -> String {
+    "summary".into()
 }
 
 impl Default for LintConfig {
@@ -84,6 +99,8 @@ impl Default for LintConfig {
             window: 8,
             exclude: vec![],
             categories: vec![],
+            engine: engine(),
+            fs_dynamic: fs_dynamic(),
         }
     }
 }

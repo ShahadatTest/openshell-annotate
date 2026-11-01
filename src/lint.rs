@@ -9,7 +9,8 @@
 use crate::config::Config;
 use crate::directive::{Directive, Kind};
 use crate::lexer::Language;
-use crate::scan::Scan;
+use crate::ast::{self, Pth, Site};
+use crate::scan::{Scan, Source};
 use crate::validate;
 use regex::Regex;
 use serde::Serialize;
@@ -180,7 +181,7 @@ pub fn secret_like(name: &str) -> bool {
     })
 }
 
-fn url_hosts(raw: &str) -> Vec<String> {
+pub(crate) fn url_hosts(raw: &str) -> Vec<String> {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| {
         Regex::new(r"(?:https?|wss?)://([A-Za-z0-9][A-Za-z0-9.\-]*[A-Za-z0-9])(?::(\d+))?").unwrap()
@@ -244,6 +245,23 @@ pub fn lint(scan: &Scan, cfg: &Config) -> Vec<Finding> {
             }
         })
         .collect();
+    let fs_roots: Vec<String> = scan
+        .directives
+        .iter()
+        .filter_map(|d| match &d.kind {
+            Kind::Fs { write: true, path } => Some(path.clone()),
+            _ => None,
+        })
+        .collect();
+    let egress: Vec<(String, Vec<u16>)> = scan
+        .directives
+        .iter()
+        .filter_map(|d| match &d.kind {
+            Kind::Egress { host, ports } => Some((host.clone(), ports.clone())),
+            _ => None,
+        })
+        .collect();
+    let mut dyn_fs: Vec<(String, Vec<usize>)> = Vec::new();
     for src in &scan.sources {
         if excluded(&src.rel, cfg) {
             continue;
@@ -259,6 +277,12 @@ pub fn lint(scan: &Scan, cfg: &Config) -> Vec<Finding> {
                     && (d.file_scoped() || (d.line <= line && line - d.line <= cfg.lint.window))
             })
         };
+        if cfg.lint.engine != "regex" {
+            if let Some(sites) = ast::sites(src.lang, &src.rel, &src.lexed.raw.join("\n")) {
+                lint_sites(src, sites, cfg, &Ctx { provider_envs: &provider_envs, fs_roots: &fs_roots, egress: &egress }, &covered, &mut out, &mut dyn_fs);
+                continue;
+            }
+        }
         let env_re = env_name_re(src.lang);
         for (i, code) in src.lexed.code.iter().enumerate() {
             let line = i + 1;
@@ -353,8 +377,134 @@ pub fn lint(scan: &Scan, cfg: &Config) -> Vec<Finding> {
             }
         }
     }
+    if cfg.lint.fs_dynamic == "summary" && !dyn_fs.is_empty() && !fs_roots.is_empty() {
+        let total: usize = dyn_fs.iter().map(|d| d.1.len()).sum();
+        dyn_fs.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then(a.0.cmp(&b.0)));
+        let top: Vec<String> = dyn_fs.iter().take(5).map(|(f, l)| format!("{f} ({})", l.len())).collect();
+        out.push(Finding {
+            file: ".".into(),
+            line: 0,
+            severity: Severity::Info,
+            category: "fs",
+            message: format!(
+                "{total} filesystem write(s) in {} file(s) use non-literal paths and cannot be checked statically; they must land under the declared fs write roots ({}) or /tmp. Most: {}. Set [lint] fs_dynamic = \"info\" for one line per file.",
+                dyn_fs.len(),
+                fs_roots.join(", "),
+                top.join(", ")
+            ),
+        });
+    }
     out.sort_by(|a, b| (a.severity, &a.file, a.line).cmp(&(b.severity, &b.file, b.line)));
     out
+}
+
+struct Ctx<'a> {
+    provider_envs: &'a BTreeSet<&'a str>,
+    fs_roots: &'a [String],
+    egress: &'a [(String, Vec<u16>)],
+}
+
+fn host_known(ctx: &Ctx, hp: &str) -> bool {
+    let Some((h, p)) = hp.rsplit_once(':') else { return false };
+    let p: u16 = p.parse().unwrap_or(443);
+    ctx.egress
+        .iter()
+        .any(|(eh, ports)| crate::diff_logs::host_matches(eh, h) && ports.contains(&p))
+}
+
+fn placeholder_host(hp: &str) -> bool {
+    let h = hp.rsplit_once(':').map_or(hp, |x| x.0);
+    h.contains("example.")
+        || h.ends_with(".test")
+        || h.ends_with(".local")
+        || h.ends_with(".internal")
+        || matches!(h, "www.w3.org" | "w3.org" | "json-schema.org" | "schemas.xmlsoap.org" | "xmlns.com")
+}
+
+/// AST-site lint for one source file.
+fn lint_sites(
+    src: &Source,
+    mut sites: Vec<Site>,
+    cfg: &Config,
+    ctx: &Ctx,
+    covered: &dyn Fn(usize, &str) -> bool,
+    out: &mut Vec<Finding>,
+    dyn_fs: &mut Vec<(String, Vec<usize>)>,
+) {
+    sites.sort_by_key(|s| s.line);
+    let want = |c: &str| cfg.lint.categories.is_empty() || cfg.lint.categories.iter().any(|x| x == c);
+    let mut net_lines: BTreeSet<usize> = BTreeSet::new();
+    let mut seen_env: BTreeSet<(usize, String)> = BTreeSet::new();
+    let mut file_dyn: Vec<usize> = Vec::new();
+    let mut push = |line: usize, severity: Severity, category: &'static str, message: String| {
+        out.push(Finding { file: src.rel.clone(), line, severity, category, message });
+    };
+    // calls first so that a URL literal on the same line as a flagged call is not reported twice
+    sites.sort_by_key(|s| (s.line, !s.call));
+    for s in &sites {
+        if !want(s.cat) {
+            continue;
+        }
+        match s.cat {
+            "env" => {
+                let Some(n) = &s.env else { continue };
+                if !secret_like(n) || ctx.provider_envs.contains(n.as_str()) || covered(s.line, "env") || !seen_env.insert((s.line, n.clone())) {
+                    continue;
+                }
+                push(s.line, Severity::Warning, "env", format!("reads secret-like variable {n} with no `@openshell provider {n}`; if a provider supplies it, declare it; otherwise `@openshell ignore kind=env reason=\"...\"`"));
+            }
+            "exec" => {
+                if !covered(s.line, "exec") {
+                    push(s.line, Severity::Info, "exec", format!("{}: the spawned program is the binary that opens its own connections; if it talks to the network add `bin=` on its egress, else `@openshell ignore kind=exec reason=\"...\"`", s.what));
+                }
+            }
+            "net" => {
+                if covered(s.line, "net") {
+                    continue;
+                }
+                let unknown: Vec<&String> = s.urls.iter().filter(|u| !host_known(ctx, u) && (s.call || !placeholder_host(u))).collect();
+                if s.call {
+                    if !s.urls.is_empty() && unknown.is_empty() {
+                        net_lines.insert(s.line);
+                        continue;
+                    }
+                    let hint = if unknown.is_empty() {
+                        " (no literal URL in the arguments: declare the host with @openshell egress, or @openshell ignore kind=net)".to_string()
+                    } else {
+                        format!(" (suggest: @openshell egress {} reason=\"...\")", unknown.iter().map(|x| x.as_str()).collect::<Vec<_>>().join(", "))
+                    };
+                    net_lines.insert(s.line);
+                    push(s.line, Severity::Warning, "net", format!("{} without an @openshell directive{hint}", s.what));
+                } else if !unknown.is_empty() && !net_lines.contains(&s.line) {
+                    net_lines.insert(s.line);
+                    push(s.line, Severity::Info, "net", format!("URL literal to {} has no matching @openshell egress (suggest: @openshell egress {} reason=\"...\")", unknown[0], unknown.iter().map(|x| x.as_str()).collect::<Vec<_>>().join(", ")));
+                }
+            }
+            "fs" => {
+                let p = s.path.clone().unwrap_or(Pth::Dynamic);
+                if ast::is_covered_path(&p, ctx.fs_roots) || covered(s.line, "fs") {
+                    continue;
+                }
+                match p {
+                    Pth::Literal(l) => push(s.line, Severity::Warning, "fs", format!("{} to {l}, which is outside the sandbox baseline (/tmp) and every declared fs write root (add `@openshell fs write <dir> reason=\"...\"` or `@openshell ignore kind=fs`)", s.what)),
+                    _ => file_dyn.push(s.line),
+                }
+            }
+            _ => {}
+        }
+    }
+    if !file_dyn.is_empty() && cfg.lint.fs_dynamic != "off" {
+        let first = file_dyn[0];
+        let n = file_dyn.len();
+        let no_roots = ctx.fs_roots.is_empty();
+        if no_roots || cfg.lint.fs_dynamic == "warn" {
+            push(first, Severity::Warning, "fs", format!("{n} filesystem write(s) with non-literal paths (first here) and {}: declare where the app may write (`@openshell fs write <dir> reason=\"...\"`) or `@openshell ignore kind=fs scope=file`", if no_roots { "no `@openshell fs write` root declared anywhere" } else { "fs_dynamic = warn" }));
+        } else if cfg.lint.fs_dynamic == "info" {
+            push(first, Severity::Info, "fs", format!("{n} filesystem write(s) with non-literal paths (first here); they must land under a declared fs write root or /tmp"));
+        } else {
+            dyn_fs.push((src.rel.clone(), file_dyn));
+        }
+    }
 }
 
 #[cfg(test)]
