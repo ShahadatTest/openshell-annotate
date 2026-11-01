@@ -63,7 +63,7 @@ struct RuleAcc {
     bins: BTreeMap<String, String>, // path -> origin
 }
 
-fn slug(host: &str) -> String {
+pub(crate) fn slug(host: &str) -> String {
     let mut s = String::new();
     let mut last_us = true;
     for c in host.chars() {

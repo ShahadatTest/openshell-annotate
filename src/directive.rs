@@ -244,7 +244,7 @@ fn allowed_attrs(verb: &str) -> (&'static [&'static str], &'static [&'static str
         "fs" => (&[], &[]),
         "bin" => (&[], &[]),
         "process" => (&["user", "group"], &[]),
-        "ignore" => (&["kind"], &[]),
+        "ignore" => (&["kind", "host"], &[]),
         _ => (&[], &[]),
     }
 }

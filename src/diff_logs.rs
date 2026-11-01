@@ -214,6 +214,23 @@ pub fn host_matches(pat: &str, host: &str) -> bool {
     p == h
 }
 
+/// The supervisor matches a connection against the binary *and its ancestors*, so a helper spawned by an allowed
+/// binary shows up in logs under its own path (git -> git-remote-http).
+fn bin_matches(row_bin: &str, ev_bin: &str) -> bool {
+    if row_bin == ev_bin {
+        return true;
+    }
+    let base = ev_bin.rsplit('/').next().unwrap_or("");
+    row_bin.ends_with("/git") && ev_bin.contains("/git-core/") && base.starts_with("git-")
+}
+
+fn row_rule_name(r: &Row) -> String {
+    r.dir
+        .attr("rule")
+        .map(str::to_string)
+        .unwrap_or_else(|| crate::generate::slug(&r.host))
+}
+
 fn row_matches_target(r: &Row, host: &str, port: Option<u16>) -> bool {
     host_matches(&r.host, host) && port.map_or(true, |p| r.ports.contains(&p))
 }
@@ -267,6 +284,16 @@ pub struct NonActionable {
     pub why: String,
 }
 
+/// Denials that match an `@openshell ignore kind=net host=...` directive: deliberately not allowed.
+#[derive(Debug, Clone, Serialize)]
+pub struct Declined {
+    pub host: String,
+    pub port: Option<u16>,
+    pub count: usize,
+    pub directive: String,
+    pub reason: String,
+}
+
 #[derive(Debug, Default, Serialize)]
 pub struct Report {
     pub events: usize,
@@ -275,6 +302,7 @@ pub struct Report {
     pub suggestions: Vec<Suggestion>,
     pub stale: Vec<Stale>,
     pub non_actionable: Vec<NonActionable>,
+    pub declined: Vec<Declined>,
 }
 
 /// `GET:/v1/**` style rule vs. a method and path (`**` spans segments, `*` one segment).
@@ -344,7 +372,21 @@ pub fn analyze(events: &[Event], scan: &Scan, cfg: &Config) -> Report {
     type Key = (Option<String>, String, Option<u16>);
     let mut groups: BTreeMap<Key, (usize, BTreeSet<(String, String)>)> = BTreeMap::new();
     let mut na: BTreeMap<(String, Option<u16>, String), usize> = BTreeMap::new();
+    let ignores: Vec<(&Directive, &str)> = scan
+        .directives
+        .iter()
+        .filter(|d| matches!(d.kind, Kind::Ignore))
+        .filter_map(|d| d.attr("host").map(|h| (d, h)))
+        .collect();
+    let mut declined: BTreeMap<(String, Option<u16>, String), (usize, String)> = BTreeMap::new();
     for e in events.iter().filter(|e| e.action == Action::Denied) {
+        if let Some((d, _)) = ignores.iter().find(|(_, h)| host_matches(h, &e.host)) {
+            let g = declined
+                .entry((e.host.clone(), e.port, d.loc()))
+                .or_insert((0, d.reason().unwrap_or_default().to_string()));
+            g.0 += 1;
+            continue;
+        }
         if let Some(why) = non_actionable(e) {
             *na.entry((e.host.clone(), e.port, why.to_string())).or_default() += 1;
             continue;
@@ -359,6 +401,9 @@ pub fn analyze(events: &[Event], scan: &Scan, cfg: &Config) -> Report {
                 e.path.clone().unwrap_or_default(),
             ));
         }
+    }
+    for ((host, port, directive), (count, reason)) in declined {
+        rep.declined.push(Declined { host, port, count, directive, reason });
     }
     for ((host, port, why), count) in na {
         rep.non_actionable.push(NonActionable { host, port, count, why });
@@ -392,7 +437,7 @@ pub fn analyze(events: &[Event], scan: &Scan, cfg: &Config) -> Report {
             }
             continue;
         }
-        let bin_ok = bin.as_ref().map_or(true, |b| matching.iter().any(|r| r.bin.as_ref() == Some(b)));
+        let bin_ok = bin.as_ref().map_or(true, |b| matching.iter().any(|r| r.bin.as_deref().map_or(false, |rb| bin_matches(rb, b))));
         if !bin_ok {
             let r = matching[0];
             let d = format!(
@@ -406,7 +451,7 @@ pub fn analyze(events: &[Event], scan: &Scan, cfg: &Config) -> Report {
         }
         // host:port and binary are covered: remaining denials are L7 (method/path not permitted).
         for (m, p) in l7 {
-            let r = matching.iter().find(|r| bin.is_none() || r.bin == *bin).unwrap_or(&matching[0]);
+            let r = matching.iter().find(|r| bin.is_none() || r.bin.as_deref().zip(bin.as_deref()).map_or(false, |(a, b)| bin_matches(a, b))).unwrap_or(&matching[0]);
             if r.dir.attr("access").is_some() {
                 rep.suggestions.push(Suggestion { kind: "manual", host: host.clone(), port: *port, binary: bin.clone(), count: *count, directive: None, place: Some(r.dir.loc()), note: format!("{m} {p} denied under access={}; raise access or switch {} to allow=\"...\" rules", r.dir.attr("access").unwrap(), r.dir.loc()) });
                 continue;
@@ -437,10 +482,10 @@ pub fn analyze(events: &[Event], scan: &Scan, cfg: &Config) -> Report {
         for r in &rows {
             let hit = events.iter().any(|e| {
                 row_matches_target(r, &e.host, e.port)
-                    && match (&r.bin, &e.binary) {
-                        (Some(a), Some(b)) => a == b,
+                    && (match (&r.bin, &e.binary) {
+                        (Some(a), Some(b)) => bin_matches(a, b),
                         _ => true,
-                    }
+                    } || e.policy.as_deref() == Some(row_rule_name(r).as_str()))
             });
             if !hit {
                 rep.stale.push(Stale {
@@ -572,6 +617,16 @@ pub fn render_text(rep: &Report) -> String {
             st.directive, st.target
         ));
     }
+    for d in &rep.declined {
+        s.push_str(&format!(
+            "\nDECLINED         {}:{} x{} by {} ({})\n",
+            d.host,
+            d.port.map_or("?".into(), |p| p.to_string()),
+            d.count,
+            d.directive,
+            d.reason
+        ));
+    }
     for n in &rep.non_actionable {
         s.push_str(&format!(
             "\nNON-ACTIONABLE   {}:{} x{} {}\n",
@@ -607,6 +662,13 @@ garbage line\n";
         assert_eq!(e.len(), 2);
         assert_eq!((e[0].action, e[0].host.as_str(), e[0].binary.as_deref()), (Action::Denied, "1.2.3.4", Some("/usr/bin/git")));
         assert_eq!((e[1].action, e[1].class, e[1].host.as_str()), (Action::Allowed, "http", "h.example"));
+    }
+
+    #[test]
+    fn git_helpers_match_their_parent_binary() {
+        assert!(bin_matches("/usr/bin/git", "/usr/lib/git-core/git-remote-http"));
+        assert!(!bin_matches("/usr/bin/curl", "/usr/lib/git-core/git-remote-http"));
+        assert!(!bin_matches("/usr/bin/git", "/usr/bin/curl"));
     }
 
     #[test]

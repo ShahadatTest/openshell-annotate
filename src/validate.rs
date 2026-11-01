@@ -220,6 +220,14 @@ pub fn check_directive(d: &Directive) -> Vec<String> {
                         .into(),
                 );
             }
+            if let Some(h) = d.attr("host") {
+                if d.attr("kind") != Some("net") {
+                    e.push("ignore host=... needs kind=net".into());
+                }
+                if let Err(m) = check_host(h) {
+                    e.push(format!("ignore host: {m}"));
+                }
+            }
         }
         Kind::Provider { .. } => {
             if let Some(p) = d.attr("profile").or(d.attr("name")) {

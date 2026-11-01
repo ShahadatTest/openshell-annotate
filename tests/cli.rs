@@ -733,3 +733,24 @@ fn profiles_dirs_lists_several_directories_and_profiles_dir_still_works() {
     assert!(o.status.success(), "{}", err(&o));
     assert_eq!(std::fs::read_to_string(t.path().join("p2.json")).unwrap(), want);
 }
+
+#[test]
+fn diff_logs_ignore_host_declines_a_denial_on_purpose() {
+    let t = fixture();
+    std::fs::write(
+        t.path().join("src/decline.ts"),
+        "// @openshell ignore kind=net host=*.newvendor.io reason=\"vendor telemetry is deliberately blocked\"\nexport {};\n",
+    )
+    .unwrap();
+    let (code, v) = diff_json(t.path(), "ocsf.jsonl");
+    assert_eq!(code, 1); // cdn.other.dev is still missing
+    let k = kinds(&v);
+    assert!(!k.iter().any(|(_, h, _)| h == "api.newvendor.io"), "{k:?}");
+    let d = &v["declined"].as_array().unwrap()[0];
+    assert_eq!(d["host"], "api.newvendor.io");
+    assert!(d["reason"].as_str().unwrap().contains("deliberately blocked"));
+    // host= is only valid with kind=net
+    std::fs::write(t.path().join("src/bad.ts"), "// @openshell ignore host=x.example.com reason=\"r\"\n").unwrap();
+    let o = run(t.path(), &["lint"]);
+    assert!(out(&o).contains("ignore host=... needs kind=net"), "{}{}", out(&o), err(&o));
+}
