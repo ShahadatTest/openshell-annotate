@@ -34,8 +34,7 @@ pub struct PolicyConfig {
     #[serde(default = "enforce")]
     pub enforcement: String,
     /// Baseline system paths (`/usr /lib /etc /proc /dev/urandom` read, `/tmp /dev/null` write) that any process needs to start.
-    /// OpenShell's supervisor adds them itself only when `network_policies` is non-empty, so a policy with filesystem
-    /// directives but no egress would otherwise be unable to exec anything. `auto` (default) adds them only in that case,
+    /// OpenShell's supervisor adds them itself only when `network_policies` is non-empty, so a policy without egress would otherwise be unable to exec anything (verified: `failed to spawn sandbox entrypoint: Permission denied`). `auto` (default) adds them whenever the policy has no network rules,
     /// `always` adds them whenever a filesystem_policy is emitted, `never` leaves the policy exactly as annotated.
     #[serde(default = "auto")]
     pub system_paths: String,

@@ -486,3 +486,15 @@ fn system_paths_never_leaves_the_policy_as_annotated() {
     let o = run(bad.path(), &["generate"]);
     assert!(!o.status.success() && err(&o).contains("system_paths"), "{}", err(&o));
 }
+
+#[test]
+fn process_only_policy_still_gets_a_runnable_filesystem() {
+    let t = tempfile::tempdir().unwrap();
+    std::fs::write(
+        t.path().join("a.js"),
+        "// @openshell process user=1000 group=1000 reason=\"non-root\"\n",
+    )
+    .unwrap();
+    let y = out(&run(t.path(), &["generate"]));
+    assert!(y.contains("run_as_user") && y.contains("\"/usr\"") && y.contains("\"/tmp\""), "{y}");
+}

@@ -70,7 +70,7 @@ shell = "/bin/bash"
 include_workdir = true
 enforcement = "enforce"   # OpenShell's own default for inspected endpoints is "audit"
 system_paths = "auto"     # auto: add /usr /lib /etc /proc /dev/urandom (ro) and /tmp /dev/null (rw) when there are
-                          # filesystem directives but no egress (the supervisor only adds them with network rules);
+                          # no egress rules (the supervisor only adds them with network rules; without them nothing can exec);
                           # always | never
 [providers]
 profiles_dir = "/path/to/OpenShell/providers"

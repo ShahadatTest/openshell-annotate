@@ -347,7 +347,7 @@ pub fn generate(
     }
     let add_baseline = match sp {
         "always" => true,
-        "auto" => (!fs_read.is_empty() || !fs_write.is_empty()) && rules.is_empty(),
+        "auto" => rules.is_empty(),
         _ => false,
     };
     if add_baseline {
