@@ -754,3 +754,16 @@ fn diff_logs_ignore_host_declines_a_denial_on_purpose() {
     let o = run(t.path(), &["lint"]);
     assert!(out(&o).contains("ignore host=... needs kind=net"), "{}{}", out(&o), err(&o));
 }
+
+#[test]
+fn js_directives_survive_regex_literals_that_confuse_a_lexer() {
+    let t = fixture();
+    // an unbalanced quote inside a regex literal would hide everything below it from a hand-written lexer
+    std::fs::write(
+        t.path().join("src/rx.ts"),
+        "const re = /[\"'`]\\//g;\nexport function f(a: number, b: number) { return a / b / 2; }\n// @openshell egress ws.rx-test.example:443 reason=\"after a regex literal\"\nexport const x = 1;\n",
+    )
+    .unwrap();
+    let o = run(t.path(), &["scan"]);
+    assert!(out(&o).contains("src/rx.ts:3  egress"), "{}{}", out(&o), err(&o));
+}

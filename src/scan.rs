@@ -87,7 +87,13 @@ pub fn scan(root: &Path, paths: &[PathBuf], cfg: &Config) -> Result<Scan> {
             continue;
         };
         let lang = Language::from_path(&path).unwrap();
-        let lexed = lex(lang, &src);
+        let mut lexed = lex(lang, &src);
+        if lang == Language::JavaScript {
+            // the grammar knows regex literals and JSX; the hand-written lexer does not
+            if let Some(c) = crate::ast::comments(lang, &rel, &src) {
+                lexed.comments = c;
+            }
+        }
         let (ds, es) = extract(&rel, lang, &lexed.comments);
         out.directives.extend(ds);
         out.errors.extend(es);

@@ -179,17 +179,7 @@ fn urls_in(nodes: &[Node], src: &str) -> Vec<String> {
 /// Parse and extract sites. `None` when the grammar cannot be loaded or parsing fails outright.
 pub fn sites(lang: Language, rel: &str, text: &str) -> Option<Vec<Site>> {
     let mut parser = Parser::new();
-    let l: tree_sitter::Language = match lang {
-        Language::JavaScript => match rel.rsplit('.').next().unwrap_or("") {
-            "ts" | "mts" | "cts" => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-            "tsx" => tree_sitter_typescript::LANGUAGE_TSX.into(),
-            _ => tree_sitter_javascript::LANGUAGE.into(),
-        },
-        Language::Python => tree_sitter_python::LANGUAGE.into(),
-        Language::Go => tree_sitter_go::LANGUAGE.into(),
-        Language::Shell => tree_sitter_bash::LANGUAGE.into(),
-    };
-    parser.set_language(&l).ok()?;
+    parser.set_language(&language_for(lang, rel)).ok()?;
     let tree = parser.parse(text, None)?;
     let mut out = Vec::new();
     let mut imp = FsImports::new();
@@ -205,6 +195,58 @@ pub fn sites(lang: Language, rel: &str, text: &str) -> Option<Vec<Site>> {
         url_literal(n, text, &mut out);
         if cur.goto_first_child() {
             continue;
+        }
+        loop {
+            if cur.goto_next_sibling() {
+                continue 'outer;
+            }
+            if !cur.goto_parent() {
+                break 'outer;
+            }
+        }
+    }
+    Some(out)
+}
+
+fn language_for(lang: Language, rel: &str) -> tree_sitter::Language {
+    match lang {
+        Language::JavaScript => match rel.rsplit('.').next().unwrap_or("") {
+            "ts" | "mts" | "cts" => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            "tsx" => tree_sitter_typescript::LANGUAGE_TSX.into(),
+            _ => tree_sitter_javascript::LANGUAGE.into(),
+        },
+        Language::Python => tree_sitter_python::LANGUAGE.into(),
+        Language::Go => tree_sitter_go::LANGUAGE.into(),
+        Language::Shell => tree_sitter_bash::LANGUAGE.into(),
+    }
+}
+
+/// Comments from the real syntax tree, one entry per line with the leader removed. The hand-written lexer cannot
+/// tell a JS regex literal from a division, so a stray quote inside a regex can turn the rest of a big file into a
+/// "string" and hide its directives; the grammar does not have that problem.
+pub fn comments(lang: Language, rel: &str, text: &str) -> Option<Vec<crate::lexer::Comment>> {
+    let mut parser = Parser::new();
+    parser.set_language(&language_for(lang, rel)).ok()?;
+    let tree = parser.parse(text, None)?;
+    let mut out = Vec::new();
+    let mut cur = tree.root_node().walk();
+    'outer: loop {
+        let n = cur.node();
+        if n.kind() == "comment" {
+            let t = txt(n, text);
+            let first = line_of(n);
+            for (i, l) in t.lines().enumerate() {
+                let l = l.trim();
+                let l = if i == 0 {
+                    l.strip_prefix("//").or_else(|| l.strip_prefix("/*")).or_else(|| l.strip_prefix('#')).unwrap_or(l)
+                } else {
+                    l.strip_prefix('*').unwrap_or(l)
+                };
+                let l = l.strip_suffix("*/").unwrap_or(l);
+                out.push(crate::lexer::Comment { line: first + i, text: l.to_string() });
+            }
+        } else if cur.goto_first_child() {
+            continue 'outer;
         }
         loop {
             if cur.goto_next_sibling() {
