@@ -69,14 +69,18 @@ shell = "/bin/bash"
 [policy]
 include_workdir = true
 enforcement = "enforce"   # OpenShell's own default for inspected endpoints is "audit"
+system_paths = "auto"     # auto: add /usr /lib /etc /proc /dev/urandom (ro) and /tmp /dev/null (rw) when there are
+                          # filesystem directives but no egress (the supervisor only adds them with network rules);
+                          # always | never
 [providers]
 profiles_dir = "/path/to/OpenShell/providers"
 [providers.env]           # env var -> profile id overrides
 [lint]
 window = 8                 # lines a directive covers below it
-exclude = []
+exclude = []               # "^prefix/" anchors at the repo root; anything else is a substring of "/<relative path>"
+categories = []            # restrict call-site heuristics to any of "net", "fs", "env", "exec" (empty = all)
 [scan]
-exclude = []
+exclude = []               # same pattern syntax as [lint].exclude
 ```
 
 ## Limits (be aware)

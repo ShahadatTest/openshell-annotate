@@ -453,3 +453,36 @@ fn schema_crate_rejects_what_we_never_emit() {
     assert!(openshell_policy_schema::parse_policy("version: 2\n").is_err());
     assert!(openshell_policy_schema::parse_policy("version: 1\nnetwork_policies:\n  a:\n    endpoints:\n      - host: x.test\n        port: 443\n        nope: 1\n").is_err());
 }
+
+fn fs_only_repo(extra_toml: &str) -> tempfile::TempDir {
+    let t = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(t.path().join("src")).unwrap();
+    std::fs::write(
+        t.path().join("src/a.js"),
+        "// @openshell fs write /data/out reason=\"results\"\n",
+    )
+    .unwrap();
+    std::fs::write(t.path().join("openshell-annotate.toml"), extra_toml).unwrap();
+    t
+}
+
+#[test]
+fn system_paths_are_added_when_there_are_no_network_rules() {
+    let t = fs_only_repo("");
+    let o = run(t.path(), &["generate"]);
+    assert!(o.status.success(), "{}", err(&o));
+    let y = out(&o);
+    for p in ["\"/usr\"", "\"/lib\"", "\"/etc\"", "\"/proc\"", "\"/dev/urandom\"", "\"/tmp\"", "\"/dev/null\"", "\"/data/out\""] {
+        assert!(y.contains(p), "missing {p} in\n{y}");
+    }
+}
+
+#[test]
+fn system_paths_never_leaves_the_policy_as_annotated() {
+    let t = fs_only_repo("[policy]\nsystem_paths = \"never\"\n");
+    let y = out(&run(t.path(), &["generate"]));
+    assert!(y.contains("\"/data/out\"") && !y.contains("\"/usr\""), "{y}");
+    let bad = fs_only_repo("[policy]\nsystem_paths = \"sometimes\"\n");
+    let o = run(bad.path(), &["generate"]);
+    assert!(!o.status.success() && err(&o).contains("system_paths"), "{}", err(&o));
+}

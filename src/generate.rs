@@ -338,6 +338,33 @@ pub fn generate(
         }
     }
 
+    // Baseline system paths the supervisor does not add for policies without network rules.
+    let sp = cfg.policy.system_paths.as_str();
+    if !matches!(sp, "auto" | "always" | "never") {
+        errors.push(format!(
+            "[policy].system_paths = \"{sp}\": expected auto, always or never"
+        ));
+    }
+    let add_baseline = match sp {
+        "always" => true,
+        "auto" => (!fs_read.is_empty() || !fs_write.is_empty()) && rules.is_empty(),
+        _ => false,
+    };
+    if add_baseline {
+        let why = "OpenShell proxy baseline: needed to exec anything; the supervisor adds it only when network rules exist".to_string();
+        for p in ["/usr", "/lib", "/etc", "/proc", "/dev/urandom"] {
+            if !fs_read.contains_key(p) && !fs_write.contains_key(p) {
+                fs_read.entry(p.to_string()).or_default().push(("[policy].system_paths".to_string(), why.clone()));
+            }
+        }
+        for p in ["/tmp", "/dev/null"] {
+            if !fs_write.contains_key(p) {
+                fs_read.remove(p);
+                fs_write.entry(p.to_string()).or_default().push(("[policy].system_paths".to_string(), why.clone()));
+            }
+        }
+    }
+
     // Process
     let mut user: Option<(String, String)> = None;
     let mut group: Option<(String, String)> = None;

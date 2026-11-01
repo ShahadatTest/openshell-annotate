@@ -33,6 +33,12 @@ pub struct PolicyConfig {
     /// Default `enforcement` for inspected endpoints (OpenShell's own default is `audit`).
     #[serde(default = "enforce")]
     pub enforcement: String,
+    /// Baseline system paths (`/usr /lib /etc /proc /dev/urandom` read, `/tmp /dev/null` write) that any process needs to start.
+    /// OpenShell's supervisor adds them itself only when `network_policies` is non-empty, so a policy with filesystem
+    /// directives but no egress would otherwise be unable to exec anything. `auto` (default) adds them only in that case,
+    /// `always` adds them whenever a filesystem_policy is emitted, `never` leaves the policy exactly as annotated.
+    #[serde(default = "auto")]
+    pub system_paths: String,
 }
 
 impl Default for PolicyConfig {
@@ -40,6 +46,7 @@ impl Default for PolicyConfig {
         PolicyConfig {
             include_workdir: true,
             enforcement: "enforce".into(),
+            system_paths: "auto".into(),
         }
     }
 }
@@ -95,6 +102,10 @@ pub struct ScanConfig {
     /// Path patterns (see `path_matches`) never scanned (in addition to .gitignore, node_modules, dist, build, target).
     #[serde(default)]
     pub exclude: Vec<String>,
+}
+
+fn auto() -> String {
+    "auto".into()
 }
 
 fn yes() -> bool {
