@@ -1,0 +1,5 @@
+{"class_uid":4001,"action":"Denied","status_detail":"transparent_tcp_policy_denied","dst_endpoint":{"domain":"api.newvendor.io","port":443},"actor":{"process":{"name":"/usr/bin/python3.12"}},"firewall_rule":{"name":"-"}}
+{"class_uid":4001,"action_id":2,"status_detail":"transparent_tcp_policy_denied","dst_endpoint":{"domain":"cdn.other.dev","ip":"1.2.3.4","port":8443},"actor":{"process":{"name":"/usr/local/bin/node"}}}
+{"class_uid":4002,"action":"Denied","dst_endpoint":{"domain":"huggingface.co","port":443},"http_request":{"http_method":"POST","url":{"hostname":"huggingface.co","path":"/api/upload"}},"status_detail":"L7_REQUEST deny"}
+{"class_uid":4001,"action":"Allowed","dst_endpoint":{"domain":"registry.npmjs.org","port":443},"actor":{"process":{"name":"/usr/local/bin/node"}}}
+{"class_uid":3002,"action":"Allowed","dst_endpoint":{"domain":"ignored.example","port":443}}

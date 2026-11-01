@@ -1,0 +1,8 @@
+[2026-11-01T10:00:01.100Z] [sandbox] [OCSF ] [ocsf] NET:OPEN [INFO] ALLOWED /usr/local/bin/node(41) -> registry.npmjs.org:443 [policy:rule_registry_npmjs_org_443 engine:opa]
+[2026-11-01T10:00:02.100Z] [sandbox] [OCSF ] [ocsf] NET:OPEN [MED] DENIED /usr/bin/curl(52) -> registry.npmjs.org:443 [policy:- engine:opa] [reason:transparent_tcp_policy_denied]
+[2026-11-01T10:00:03.100Z] [sandbox] [OCSF ] [ocsf] NET:OPEN [MED] DENIED /usr/bin/curl(53) -> registry.npmjs.org:443 [policy:- engine:opa] [reason:transparent_tcp_policy_denied]
+[2026-11-01T10:00:04.100Z] [sandbox] [OCSF ] [ocsf] NET:OPEN [MED] DENIED /usr/bin/python3.12(60) -> api.newvendor.io:443 [policy:- engine:opa] [reason:transparent_tcp_policy_denied]
+[2026-11-01T10:00:05.100Z] [sandbox] [OCSF ] [ocsf] HTTP:POST [MED] DENIED POST https://huggingface.co/api/upload?x=1 [policy:rule_huggingface_co_443 engine:l7] [reason:L7_REQUEST deny no matching rule]
+[2026-11-01T10:00:06.100Z] [sandbox] [OCSF ] [ocsf] HTTP:POST [MED] DENIED POST https://api.github.com/repos/a/b/issues [policy:rule_api_github_com_443 engine:l7] [reason:L7_REQUEST deny access read-only]
+[2026-11-01T10:00:07.100Z] [sandbox] [OCSF ] [ocsf] NET:OPEN [MED] DENIED /usr/bin/curl(70) -> 169.254.169.254:80 [policy:- engine:opa] [reason:ssrf_blocked]
+[2026-11-01T10:00:08.100Z] [sandbox] [OCSF ] [ocsf] NET:REFUSE [MED] DENIED nowhere.example [reason:policy_dns_ineligible]

@@ -58,6 +58,23 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Map sandbox allow/deny events (OCSF JSON lines or `openshell logs` shorthand) back to directives: suggest missing ones,
+    /// flag stale ones. Exit 1 when directives are missing.
+    DiffLogs {
+        /// Log files (`-` = stdin). OCSF JSONL (`/var/log/openshell-ocsf.*.jsonl`) and `openshell logs` output both work.
+        logs: Vec<PathBuf>,
+        /// Apply the suggested directives to the sources (or to --observed-file when no source mentions the host).
+        #[arg(long)]
+        write: bool,
+        /// File that receives suggestions no source line mentions (relative to --root).
+        #[arg(long, default_value = "openshell/observed-egress.sh")]
+        observed_file: String,
+        /// Also exit 1 when stale directives are found.
+        #[arg(long)]
+        deny_stale: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// Compare the policy generated from directives with a committed policy.yaml (CI gate).
     Drift {
         paths: Vec<PathBuf>,
@@ -86,19 +103,31 @@ fn expand(p: &str) -> PathBuf {
 }
 
 fn load_profiles(cfg: &Config, cli_dir: Option<&Path>, root: &Path) -> Result<Vec<Profile>> {
-    let dir = cli_dir.map(Path::to_path_buf).or_else(|| {
-        cfg.providers.profiles_dir.as_deref().map(expand).map(|p| {
-            if p.is_relative() {
-                root.join(p)
-            } else {
-                p
+    let resolve = |p: &str| {
+        let p = expand(p);
+        if p.is_relative() {
+            root.join(p)
+        } else {
+            p
+        }
+    };
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    match cli_dir {
+        Some(d) => dirs.push(d.to_path_buf()),
+        None => {
+            if let Some(d) = cfg.providers.profiles_dir.as_deref() {
+                dirs.push(resolve(d));
             }
-        })
-    });
-    match dir {
-        Some(d) => providers::load_profiles(&d),
-        None => Ok(vec![]),
+        }
     }
+    for d in &cfg.providers.profiles_dirs {
+        dirs.push(resolve(d));
+    }
+    let mut out = Vec::new();
+    for d in dirs {
+        out.extend(providers::load_profiles(&d)?);
+    }
+    Ok(out)
 }
 
 fn do_scan(root: &Path, paths: &[PathBuf], cfg: &Config) -> Result<Scan> {
@@ -293,6 +322,51 @@ fn run(cli: Cli) -> Result<ExitCode> {
             } else {
                 ExitCode::SUCCESS
             })
+        }
+        Cmd::DiffLogs {
+            logs,
+            write,
+            observed_file,
+            deny_stale,
+            json,
+        } => {
+            use openshell_annotate::diff_logs as dl;
+            use std::io::Read;
+            if logs.is_empty() {
+                anyhow::bail!("give at least one log file (or `-` for stdin)");
+            }
+            let mut events = Vec::new();
+            for l in &logs {
+                let mut text = String::new();
+                let name = if l.as_os_str() == "-" {
+                    std::io::stdin().read_to_string(&mut text)?;
+                    "<stdin>".to_string()
+                } else {
+                    text = std::fs::read_to_string(l)
+                        .with_context(|| format!("reading {}", l.display()))?;
+                    l.display().to_string()
+                };
+                events.extend(dl::parse_logs(&text, &name));
+            }
+            let s = do_scan(&root, &[], &cfg)?;
+            if report_parse_errors(&s) {
+                return Ok(ExitCode::from(1));
+            }
+            let rep = dl::analyze(&events, &s, &cfg);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&rep)?);
+            } else {
+                print!("{}", dl::render_text(&rep));
+            }
+            if write {
+                let touched = dl::write_suggestions(&rep, &root, &s, &observed_file)?;
+                eprintln!(
+                    "wrote suggested directives to: {}",
+                    if touched.is_empty() { "(nothing)".into() } else { touched.join(", ") }
+                );
+            }
+            let bad = !rep.suggestions.is_empty() || (deny_stale && !rep.stale.is_empty());
+            Ok(ExitCode::from(u8::from(bad)))
         }
         Cmd::Drift {
             paths,

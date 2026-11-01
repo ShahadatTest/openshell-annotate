@@ -55,6 +55,9 @@ impl Default for PolicyConfig {
 pub struct ProvidersConfig {
     /// Directory of provider-profile YAML files (e.g. `<OpenShell>/providers`).
     pub profiles_dir: Option<String>,
+    /// Further profile directories (e.g. a repo-local `openshell/profiles` for custom profiles). Read after `profiles_dir`.
+    #[serde(default)]
+    pub profiles_dirs: Vec<String>,
     /// Env var -> profile id overrides.
     #[serde(default)]
     pub env: BTreeMap<String, String>,

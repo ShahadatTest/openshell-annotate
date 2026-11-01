@@ -138,7 +138,7 @@ fn mergeable(a: &Spec, b: &Spec) -> bool {
         && (!b.allow.is_empty() || !b.deny.is_empty())
 }
 
-fn find_bin(d: &Directive, bins: &[&Directive], cfg: &Config) -> Result<(String, String), String> {
+pub(crate) fn find_bin(d: &Directive, bins: &[&Directive], cfg: &Config) -> Result<(String, String), String> {
     if let Some(b) = d.attr("bin") {
         return Ok((b.to_string(), format!("bin= at {}", d.loc())));
     }

@@ -498,3 +498,99 @@ fn process_only_policy_still_gets_a_runnable_filesystem() {
     let y = out(&run(t.path(), &["generate"]));
     assert!(y.contains("run_as_user") && y.contains("\"/usr\"") && y.contains("\"/tmp\""), "{y}");
 }
+
+// ---- diff-logs ------------------------------------------------------------------------------------------------------
+
+fn logs_fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/logs").join(name)
+}
+
+fn diff_json(t: &Path, log: &str) -> (i32, serde_json::Value) {
+    let o = run(t, &["diff-logs", logs_fixture(log).to_str().unwrap(), "--json"]);
+    (o.status.code().unwrap(), serde_json::from_str(&out(&o)).unwrap_or_else(|e| panic!("{e}: {} {}", out(&o), err(&o))))
+}
+
+fn kinds(v: &serde_json::Value) -> Vec<(String, String, String)> {
+    v["suggestions"].as_array().unwrap().iter().map(|s| (
+        s["kind"].as_str().unwrap().to_string(),
+        s["host"].as_str().unwrap().to_string(),
+        s["binary"].as_str().unwrap_or("").to_string(),
+    )).collect()
+}
+
+#[test]
+fn diff_logs_shorthand_classifies_denies() {
+    let t = fixture();
+    let (code, v) = diff_json(t.path(), "shorthand.log");
+    assert_eq!(code, 1);
+    assert_eq!(v["events"], 7); // NET:REFUSE lines carry no binary and are skipped
+    assert_eq!(v["denied"], 6);
+    let k = kinds(&v);
+    assert!(k.contains(&("binary_mismatch".into(), "registry.npmjs.org".into(), "/usr/bin/curl".into())), "{k:?}");
+    assert!(k.contains(&("missing_egress".into(), "api.newvendor.io".into(), "/usr/bin/python3.12".into())), "{k:?}");
+    assert!(k.contains(&("l7_allow".into(), "huggingface.co".into(), "".into())), "{k:?}");
+    assert!(k.contains(&("manual".into(), "api.github.com".into(), "".into())), "{k:?}");
+    // the two curl denials are one suggestion with count 2
+    let m = v["suggestions"].as_array().unwrap().iter().find(|s| s["kind"] == "binary_mismatch").unwrap();
+    assert_eq!(m["count"], 2);
+    assert!(m["directive"].as_str().unwrap().contains("bin=/usr/bin/curl"));
+    assert!(m["directive"].as_str().unwrap().contains("access=read-only"));
+    // SSRF/metadata is never actionable
+    assert!(v["non_actionable"].as_array().unwrap().iter().any(|n| n["host"] == "169.254.169.254"));
+    assert!(!k.iter().any(|(_, h, _)| h == "169.254.169.254"));
+    // openai never appears, so it is stale
+    assert!(v["stale"].as_array().unwrap().iter().any(|s| s["target"].as_str().unwrap().starts_with("api.openai.com")));
+}
+
+#[test]
+fn diff_logs_ocsf_json_matches_shorthand_semantics() {
+    let t = fixture();
+    let (code, v) = diff_json(t.path(), "ocsf.jsonl");
+    assert_eq!(code, 1);
+    // class 3002 is ignored: 4 events
+    assert_eq!(v["events"], 4);
+    let k = kinds(&v);
+    assert!(k.contains(&("missing_egress".into(), "cdn.other.dev".into(), "/usr/local/bin/node".into())), "{k:?}");
+    assert!(k.contains(&("missing_egress".into(), "api.newvendor.io".into(), "/usr/bin/python3.12".into())));
+    let l7 = v["suggestions"].as_array().unwrap().iter().find(|s| s["kind"] == "l7_allow").unwrap();
+    assert!(l7["directive"].as_str().unwrap().contains("allow=\"POST:/api/upload\""));
+    assert!(l7["directive"].as_str().unwrap().contains("bin="));
+}
+
+#[test]
+fn diff_logs_clean_when_everything_is_covered() {
+    let t = fixture();
+    let log = t.path().join("ok.log");
+    std::fs::write(&log, "[t] [sandbox] [OCSF ] [ocsf] NET:OPEN [INFO] ALLOWED /usr/local/bin/node(1) -> registry.npmjs.org:443 [policy:r engine:opa]\n").unwrap();
+    let o = run(t.path(), &["diff-logs", log.to_str().unwrap()]);
+    assert!(o.status.success(), "{}{}", out(&o), err(&o));
+    // not-seen directives are reported as stale, and --deny-stale turns that into a failure
+    assert!(out(&o).contains("STALE"));
+    let o = run(t.path(), &["diff-logs", log.to_str().unwrap(), "--deny-stale"]);
+    assert_eq!(o.status.code(), Some(1));
+}
+
+#[test]
+fn diff_logs_write_places_directives_and_is_idempotent() {
+    let t = fixture();
+    std::fs::write(t.path().join("src/extra.ts"), "export const u = 'https://api.newvendor.io/v1';\n").unwrap();
+    let log = logs_fixture("ocsf.jsonl");
+    let o = run(t.path(), &["diff-logs", log.to_str().unwrap(), "--write"]);
+    assert_eq!(o.status.code(), Some(1), "{}", err(&o));
+    // host mentioned in source: directive inserted above that line, with an explicit bin
+    let extra = std::fs::read_to_string(t.path().join("src/extra.ts")).unwrap();
+    assert!(extra.starts_with("// @openshell egress api.newvendor.io:443"), "{extra}");
+    assert!(extra.contains("bin=/usr/bin/python3.12"));
+    // host that no source mentions: parked in the observed file
+    let obs = std::fs::read_to_string(t.path().join("openshell/observed-egress.sh")).unwrap();
+    assert!(obs.contains("# @openshell egress cdn.other.dev:8443"), "{obs}");
+    // the L7 allow lands next to the directive it extends
+    let hf = std::fs::read_to_string(t.path().join("src/cache.py")).unwrap();
+    assert!(hf.contains("allow=\"POST:/api/upload\""), "{hf}");
+    // the edited tree still scans and now explains the same logs: only manual/none left
+    let o = run(t.path(), &["scan"]);
+    assert!(o.status.success(), "{}", err(&o));
+    let o = run(t.path(), &["diff-logs", log.to_str().unwrap(), "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&out(&o)).unwrap();
+    assert!(v["suggestions"].as_array().unwrap().iter().all(|s| s["kind"] == "manual"), "{}", out(&o));
+}
