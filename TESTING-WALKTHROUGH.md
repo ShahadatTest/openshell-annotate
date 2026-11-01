@@ -6,7 +6,7 @@ Verified end to end on 2026-11-01 (Asia/Jerusalem) on the dev server, OpenShell 
 | Section | What it proves | Measured time |
 |---|---|---|
 | 0. Prerequisites | tools + gateway are there | ~10 s |
-| 1. Demo loop (`~/src/annotate-demo`) | lint -> annotate -> scan -> generate -> drift -> image -> sandbox -> deny -> diff-logs `--write` -> regenerate -> allowed | ~2 min (first run, includes a 45 s image build); ~1 min on later runs |
+| 1. Demo loop (`~/src/annotate-demo`) | lint -> annotate -> scan -> generate -> drift -> image -> sandbox -> deny -> diff-logs `--write` -> regenerate -> allowed | ~25 s with the image cached (measured full scripted loop); ~70 s the first time (45 s image build) |
 | 1b. AI annotation (optional) | claude / cursor CLI adds the directives | ~1-3 min, needs your own CLI login |
 | 2. Paperclip full flow | the real repo: 106 directives, 17 rules | static ~1 min; `--diff-logs` ~1 min; sandbox + exercise ~3 min |
 | 3. Fixtures suite | 155 probes of the tool + real sandbox behaviour | static 7 s; `--sandbox` ~2 min |
@@ -44,7 +44,7 @@ with the real interpreter paths. It is a git repo with no remote; start every ru
 
 ```bash
 cd ~/src/annotate-demo
-scripts/reset.sh                         # "demo reset to the initial commit"; also deletes a leftover demo sandbox
+scripts/reset.sh                         # "demo reset to the last commit"; also deletes a leftover demo sandbox
 git status --short                       # empty
 ```
 
@@ -321,7 +321,7 @@ real sandbox probes of allowed and denied traffic, filesystem and binary-identit
 cd ~/src/openshell-annotate-fixtures
 ./run-tests.sh                           # static, ~7 s       -> summary: pass=116 fail=0 skip=0
 ./run-tests.sh --sandbox                 # + real sandboxes, ~2 min (uses fx-probe:local) -> summary: pass=155 fail=0 skip=0
-./run-tests.sh --sandbox --filter dns    # a subset by name
+./run-tests.sh --sandbox --filter difflogs   # a subset by case name (see: ls cases)
 ./run-tests.sh --update                  # re-bless expected files after an intended tool change (review the git diff!)
 ```
 
