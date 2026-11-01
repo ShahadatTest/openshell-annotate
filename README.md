@@ -23,7 +23,8 @@ const r = await fetch("https://api.openai.com/v1/chat/completions", { ... });
 |---|---|
 | `scan [PATHS] [--json]` | list directives with `file:line` (JS/TS, Python, Go, shell, Dockerfile comments; string-aware lexer) |
 | `generate [PATHS] -o policy.yaml [--providers-out f.json\|f.sh] [--profiles-dir DIR]` | emit policy.yaml with a comment per entry; re-validated with the OpenShell schema crate; providers as JSON or a setup script |
-| `lint [PATHS] [--policy policy.yaml] [--deny-warnings]` | directive validation + heuristic detection of un-annotated network calls, filesystem writes, secret reads, subprocesses; sanity-checks a policy file |
+| `lint [PATHS] [--policy policy.yaml] [--deny-warnings]` | directive validation + tree-sitter detection (JS/TS, Python, Go, bash) of un-annotated network calls, URL literals, filesystem writes, secret reads, subprocesses; sanity-checks a policy file |
+| `diff-logs LOG... [--write] [--deny-stale] [--json]` | map sandbox allow/deny events (`openshell logs` shorthand or OCSF JSONL, `-` = stdin) to directives by binary, host, port: suggests missing directives (`--write` inserts them), flags stale ones, separates non-actionable (SSRF/metadata) and declined (`ignore kind=net host=`) denials; exit 1 when something is missing |
 | `drift [PATHS] --policy policy.yaml [--providers f.json] [--strict]` | regenerate in memory and compare as typed documents; reports missing / extra / changed, tagged `startup` or `live` |
 
 Exit codes: 0 clean, 1 findings/errors, 2 usage or I/O error.
@@ -75,7 +76,11 @@ system_paths = "auto"     # auto: add /usr /lib /etc /proc /dev/urandom (ro) and
 [providers]
 profiles_dir = "/path/to/OpenShell/providers"
 [providers.env]           # env var -> profile id overrides
+[providers]
+profiles_dirs = ["openshell/profiles"]   # extra directories of custom provider profiles (also lintable with `openshell profile lint -f`)
 [lint]
+engine = "treesitter"      # or "regex" (the original line heuristics)
+fs_dynamic = "summary"     # fs writes with computed paths: summary (one repo-level info) | info (per file) | warn | off
 window = 8                 # lines a directive covers below it
 exclude = []               # "^prefix/" anchors at the repo root; anything else is a substring of "/<relative path>"
 categories = []            # restrict call-site heuristics to any of "net", "fs", "env", "exec" (empty = all)
@@ -85,11 +90,16 @@ exclude = []               # same pattern syntax as [lint].exclude
 
 ## Limits (be aware)
 
-- Lint is regex over a comment/string-masked token stream, not an AST: dynamic URLs and SDK-hidden HTTP need
-  a directive or `@openshell ignore`. Planned: tree-sitter backend.
+- Lint parses real syntax (tree-sitter) but still cannot see through SDKs or computed URLs: those need a directive or
+  `@openshell ignore`. Filesystem writes are checked against the declared `fs write` roots and `/tmp` (the sandbox baseline);
+  a write whose path is computed cannot be proven statically, so it is one repo-level info (or one warning per file when no
+  root is declared at all). Writes through an already-open `FileHandle` are not seen. `fs.mkdir` etc. are only recognised
+  as fs calls when imported from `fs`, `node:fs`, `fs/promises`, `fs-extra` (or called on an object named like `fs`).
 - JS regex literals are not parsed; Python docstrings are strings (directives must be `#` comments).
 - Filesystem/process/landlock are startup-only in OpenShell; drift labels them `startup`.
-- Runtime diff against deny logs (`diff-logs`) is not implemented in this prototype.
+- `diff-logs` only sees network and L7 events: OpenShell 0.1.6 does not log Landlock/filesystem denials (upstream #4270), log
+  delivery is batched and best-effort (wait a few seconds after the workload; absence of an event is not proof), and `NET:REFUSE` lines carry no binary.
+  A helper spawned by an allowed binary (git -> git-remote-http) is matched through its parent.
 - Semantic checks mirror `openshell-policy::validate_sandbox_policy` (documented rules) but the authoritative
   validation is the gateway (`openshell sandbox create --policy`) and, soon, `openshell policy lint` (#4035).
 

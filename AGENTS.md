@@ -5,7 +5,8 @@ This repo is `openshell-annotate`: a Rust CLI that turns `@openshell` source com
 
 ## When a user wants a policy for *their* codebase
 Follow `skills/annotate-openshell-policy/SKILL.md` (scan code for network calls, file writes, secrets and
-subprocesses; add directives with reasons; run `scan`, `generate`, `lint`, `drift`).
+subprocesses; add directives with reasons; run `scan`, `generate`, `lint`, `drift`; after a sandbox run feed the logs to
+`diff-logs`).
 
 ## When changing this tool
 - Build/test: `cargo build && cargo test` (Rust 1.94+). The schema crate is a git dependency pinned to the
@@ -19,3 +20,7 @@ subprocesses; add directives with reasons; run `scan`, `generate`, `lint`, `drif
 - Add a test for every new directive, attribute, lint pattern or error message. Fixtures live in
   `tests/fixtures/sample`; the golden `policy.expected.yaml` is intentionally reviewed by hand when it changes.
 - Do not push, fork or open PRs from this repo unless the owner says so.
+- Lint call-site detection lives in `src/ast.rs` (tree-sitter: one handler per language) and `src/lint.rs` (coverage, fs path
+  policy, summaries); the regex engine is kept behind `[lint] engine = "regex"`. New patterns need a case in
+  `tests/cli.rs` and in the fixtures repo (`~/src/openshell-annotate-fixtures`, `./run-tests.sh [--sandbox]`).
+- `diff-logs` (`src/diff_logs.rs`) parses shorthand and OCSF JSON; keep both formats in `tests/fixtures/logs`.

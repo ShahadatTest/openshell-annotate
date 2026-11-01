@@ -33,7 +33,7 @@ reason and `file:line`. You never hand-edit the generated policy.
 Run the linter first; it lists un-annotated call sites it can recognise:
 
 ```
-openshell-annotate lint            # warnings = unannotated net / fs write / secret reads, info = subprocesses
+openshell-annotate lint            # tree-sitter: warnings = unannotated net / fs write outside declared roots / secret reads; info = subprocesses, URL literals, computed-path fs writes
 ```
 
 Then search for what a regex linter cannot see. Look for, at least:
@@ -122,7 +122,8 @@ Optional deeper checks when the OpenShell CLI is available:
 ```
 openshell-prover check --boundary openshell/policy.yaml openshell/policy.yaml   # parses + checks the file offline (workaround until `openshell policy lint`)
 openshell sandbox create --policy openshell/policy.yaml ...                      # the gateway performs full validation
-openshell logs <sandbox> --source sandbox | grep DENIED                          # real denials show gaps in your directives
+openshell logs <sandbox> --source sandbox -n 5000 > logs.txt                     # wait ~5 s after the workload: delivery is batched
+openshell-annotate diff-logs logs.txt                                            # denials -> missing directives (+ stale ones); --write applies them
 ```
 
 Fix-up table:
@@ -137,6 +138,8 @@ Fix-up table:
 | `must be an absolute path` | use the in-sandbox absolute path |
 | `unmapped provider` | write/choose a provider profile; set `[providers.env]`; or `profile=` |
 | lint `warning[net]` | add an egress directive near the call, or `ignore` with a reason |
+| `diff-logs` MISSING_EGRESS / BINARY_MISMATCH | a real run was denied: review, then `diff-logs LOG --write` (or add the directive by hand), regenerate; if it must stay blocked add `@openshell ignore kind=net host=H reason="..."` |
+| `diff-logs` STALE | no event matched: advisory only (logs are lossy); remove the directive only after a run that exercised that feature |
 | drift `missing` | regenerate and commit policy.yaml |
 | drift `extra` | a policy grant has no directive: add the directive or remove the grant |
 
