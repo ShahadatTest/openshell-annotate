@@ -60,9 +60,13 @@ pub struct LintConfig {
     /// A directive covers call sites within this many lines below it.
     #[serde(default = "window")]
     pub window: usize,
-    /// Extra path substrings excluded from lint call-site heuristics (tests are excluded by default).
+    /// Extra path patterns excluded from lint call-site heuristics (tests are excluded by default); see `path_matches`.
     #[serde(default)]
     pub exclude: Vec<String>,
+    /// Call-site categories checked by the heuristics: any of "net", "fs", "env", "exec". Empty = all.
+    /// Directive errors and policy sanity checks always run.
+    #[serde(default)]
+    pub categories: Vec<String>,
 }
 
 impl Default for LintConfig {
@@ -70,14 +74,25 @@ impl Default for LintConfig {
         LintConfig {
             window: 8,
             exclude: vec![],
+            categories: vec![],
         }
+    }
+}
+
+/// Exclude-pattern matching shared by `scan` and `lint`: `^prefix` anchors at the repo root,
+/// anything else is a substring of `/<relative path>` (so `/ui/` matches any directory named ui).
+pub fn path_matches(rel: &str, pat: &str) -> bool {
+    if let Some(prefix) = pat.strip_prefix('^') {
+        rel.starts_with(prefix)
+    } else {
+        format!("/{rel}").contains(pat)
     }
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct ScanConfig {
-    /// Path substrings never scanned (in addition to .gitignore, node_modules, dist, build, target).
+    /// Path patterns (see `path_matches`) never scanned (in addition to .gitignore, node_modules, dist, build, target).
     #[serde(default)]
     pub exclude: Vec<String>,
 }
@@ -119,5 +134,19 @@ impl Config {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::path_matches;
+
+    #[test]
+    fn exclude_patterns() {
+        assert!(path_matches("ui/src/a.ts", "^ui/"));
+        assert!(!path_matches("server/src/ui/a.ts", "^ui/"));
+        assert!(path_matches("server/src/ui/a.ts", "/ui/"));
+        assert!(path_matches("ui/a.ts", "/ui/"));
+        assert!(!path_matches("server/guide/a.ts", "/ui/"));
     }
 }

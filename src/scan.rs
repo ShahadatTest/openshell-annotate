@@ -74,7 +74,7 @@ pub fn scan(root: &Path, paths: &[PathBuf], cfg: &Config) -> Result<Scan> {
                 continue;
             }
             let rel = rel_path(root, path);
-            if cfg.scan.exclude.iter().any(|x| rel.contains(x.as_str())) {
+            if cfg.scan.exclude.iter().any(|x| crate::config::path_matches(&rel, x)) {
                 continue;
             }
             files.push((rel, path.to_path_buf()));

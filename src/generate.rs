@@ -127,6 +127,17 @@ fn spec_of(d: &Directive, cfg: &Config) -> Spec {
     }
 }
 
+/// Two specs differ only in their allow/deny lists and neither uses an `access` preset.
+fn mergeable(a: &Spec, b: &Spec) -> bool {
+    a.access.is_none()
+        && b.access.is_none()
+        && a.protocol == b.protocol
+        && a.enforcement == b.enforcement
+        && a.tls == b.tls
+        && (!a.allow.is_empty() || !a.deny.is_empty())
+        && (!b.allow.is_empty() || !b.deny.is_empty())
+}
+
 fn find_bin(d: &Directive, bins: &[&Directive], cfg: &Config) -> Result<(String, String), String> {
     if let Some(b) = d.attr("bin") {
         return Ok((b.to_string(), format!("bin= at {}", d.loc())));
@@ -270,7 +281,19 @@ pub fn generate(
                 spec_origin: d.loc(),
                 sources: vec![],
             });
-        if ep.spec != spec {
+        if ep.spec != spec && mergeable(&ep.spec, &spec) {
+            // Same host:port needed by several call sites with different allow/deny lists: the policy is the union.
+            for r in spec.allow.iter() {
+                if !ep.spec.allow.contains(r) {
+                    ep.spec.allow.push(r.clone());
+                }
+            }
+            for r in spec.deny.iter() {
+                if !ep.spec.deny.contains(r) {
+                    ep.spec.deny.push(r.clone());
+                }
+            }
+        } else if ep.spec != spec {
             errors.push(format!(
                 "{}: conflicting settings for {host}:{} in rule `{rkey}` (first declared at {}); make the directives agree or split them with rule=",
                 d.loc(),

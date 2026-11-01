@@ -165,7 +165,12 @@ fn tokenize(s: &str) -> Result<Vec<Tok>, String> {
             continue;
         }
         let start = i;
-        while i < chars.len() && !chars[i].is_whitespace() && chars[i] != '=' && chars[i] != '"' {
+        // An absolute path may contain `=` (e.g. pnpm store dirs): keep it as one word.
+        let is_path = chars[start] == '/';
+        while i < chars.len()
+            && !chars[i].is_whitespace()
+            && (is_path || (chars[i] != '=' && chars[i] != '"'))
+        {
             i += 1;
         }
         if i < chars.len() && chars[i] == '=' {
@@ -465,6 +470,19 @@ mod tests {
         assert!(one("ignore kind=bogus reason=x")
             .unwrap_err()
             .contains("kind"));
+    }
+
+    #[test]
+    fn path_with_equals_sign() {
+        assert_eq!(
+            one("fs write /app/.pnpm/pkg@1_patch_hash=abc/lib reason=\"x\"")
+                .unwrap()
+                .0,
+            Kind::Fs {
+                write: true,
+                path: "/app/.pnpm/pkg@1_patch_hash=abc/lib".into()
+            }
+        );
     }
 
     #[test]

@@ -201,6 +201,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                                     .as_ref()
                                     .map(|o| o.display().to_string())
                                     .unwrap_or_else(|| "policy.yaml".into()),
+                                &root,
                             )
                         } else {
                             g.providers.to_json()

@@ -142,7 +142,25 @@ pub fn secret_like(name: &str) -> bool {
     let last = *parts.last().unwrap_or(&"");
     if matches!(
         last,
-        "FILE" | "PATH" | "DIR" | "URL" | "ENV" | "HOST" | "PORT" | "ID" | "NAME"
+        "FILE"
+            | "PATH"
+            | "DIR"
+            | "URL"
+            | "URI"
+            | "ENV"
+            | "HOST"
+            | "HOSTS"
+            | "PORT"
+            | "ID"
+            | "NAME"
+            | "MS"
+            | "SECONDS"
+            | "LIMIT"
+            | "WINDOW"
+            | "TTL"
+            | "TIMEOUT"
+            | "ENABLED"
+            | "DISABLED"
     ) {
         return false;
     }
@@ -190,7 +208,7 @@ fn url_hosts(raw: &str) -> Vec<String> {
 fn excluded(rel: &str, cfg: &Config) -> bool {
     let path = format!("/{rel}");
     DEFAULT_EXCLUDES.iter().any(|x| path.contains(x))
-        || cfg.lint.exclude.iter().any(|x| path.contains(x.as_str()))
+        || cfg.lint.exclude.iter().any(|x| crate::config::path_matches(rel, x))
 }
 
 pub fn lint(scan: &Scan, cfg: &Config) -> Vec<Finding> {
@@ -247,6 +265,11 @@ pub fn lint(scan: &Scan, cfg: &Config) -> Vec<Finding> {
             let raw = src.lexed.raw.get(i).map(String::as_str).unwrap_or("");
             let mut seen: BTreeSet<&str> = BTreeSet::new();
             for pat in patterns(src.lang) {
+                if !cfg.lint.categories.is_empty()
+                    && !cfg.lint.categories.iter().any(|c| c == pat.cat)
+                {
+                    continue;
+                }
                 if pat.cat != "env" && seen.contains(pat.cat) {
                     continue;
                 }
@@ -332,4 +355,25 @@ pub fn lint(scan: &Scan, cfg: &Config) -> Vec<Finding> {
     }
     out.sort_by(|a, b| (a.severity, &a.file, a.line).cmp(&(b.severity, &b.file, b.line)));
     out
+}
+
+#[cfg(test)]
+mod secret_name_tests {
+    use super::secret_like;
+
+    #[test]
+    fn secret_names() {
+        for n in ["OPENAI_API_KEY", "GITHUB_TOKEN", "BETTER_AUTH_SECRET", "DB_PASSWORD"] {
+            assert!(secret_like(n), "{n}");
+        }
+        for n in [
+            "PAPERCLIP_MCP_GATEWAY_TOKEN_REQUEST_LIMIT",
+            "PAPERCLIP_TOKEN_BROKER_ALLOWED_HOSTS",
+            "TOKEN_FILE",
+            "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+            "PATH",
+        ] {
+            assert!(!secret_like(n), "{n}");
+        }
+    }
 }
