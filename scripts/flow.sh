@@ -21,7 +21,7 @@
 # Exit status: 0 = clean; 1 = a check failed (see the report); 2 = usage / missing tool.
 set -u
 REPO="${1:-}"; [ -n "$REPO" ] && shift || { sed -n 2,20p "$0"; exit 2; }
-OUT=openshell; BIN="${OPENSHELL_ANNOTATE:-$HOME/src/openshell-annotate/target/release/openshell-annotate}"
+OUT=openshell; BIN="${OPENSHELL_ANNOTATE:-$(command -v openshell-annotate || echo "$HOME/src/openshell-annotate/target/release/openshell-annotate")}"
 IMAGE=""; EXERCISE=""; DIFFLOGS=""; SECS=60; CPU=2; MEM=4Gi; KEEP=0; DENY_WARN=0; ENVFROM=(); CMD=()
 while [ $# -gt 0 ]; do
   case "$1" in
