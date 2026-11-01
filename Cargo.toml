@@ -1,0 +1,28 @@
+[package]
+name = "openshell-annotate"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94"
+description = "Policy-as-code for OpenShell: scan @openshell source directives and generate/validate policy.yaml"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+# Pinned to the OpenShell v0.1.6 tag of the local checkout (~/src/OpenShell). Cargo.lock records the commit.
+openshell-policy-schema = { git = "file:///path/to/OpenShell", tag = "v0.1.6" }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+ignore = "0.4"
+miette = "7"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+# Same YAML implementation OpenShell uses, for reading trusted provider-profile files.
+serde_yml = { package = "noyalib", version = "0.0.53", default-features = false, features = ["std", "compat-serde-yaml"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.rust]
+unsafe_code = "forbid"

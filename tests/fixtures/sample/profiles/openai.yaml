@@ -1,0 +1,10 @@
+id: openai
+display_name: OpenAI
+credentials:
+  - name: api_key
+    env_vars: [OPENAI_API_KEY]
+    required: true
+endpoints:
+  - host: api.openai.com
+    port: 443
+    protocol: rest

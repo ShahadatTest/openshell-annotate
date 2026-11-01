@@ -1,0 +1,9 @@
+# Image facts: real paths of the executables inside the sandbox image.
+[languages]
+javascript = "/usr/local/bin/node"
+python = "/usr/bin/python3.12"
+go = "/opt/app/server"
+shell = "/bin/bash"
+
+[providers]
+profiles_dir = "profiles"

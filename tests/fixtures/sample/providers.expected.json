@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "instance": "openai",
+      "profile": "openai",
+      "credentials": [
+        "OPENAI_API_KEY"
+      ],
+      "sources": [
+        "src/llm.ts:2"
+      ],
+      "profile_endpoints": [
+        "api.openai.com:443"
+      ]
+    }
+  ],
+  "unmapped": []
+}
