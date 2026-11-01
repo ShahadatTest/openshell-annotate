@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use openshell_annotate::config::Config;
 use openshell_annotate::directive::Directive;
 use openshell_annotate::drift;
@@ -29,12 +29,14 @@ struct Cli {
 enum Cmd {
     /// List directives with file:line.
     Scan {
+        /// Files or directories to process (default: the whole root).
         paths: Vec<PathBuf>,
         #[arg(long)]
         json: bool,
     },
     /// Generate policy.yaml (and a providers file) from directives.
     Generate {
+        /// Files or directories to process (default: the whole root).
         paths: Vec<PathBuf>,
         /// Write policy here (default: stdout).
         #[arg(short, long)]
@@ -48,6 +50,7 @@ enum Cmd {
     },
     /// Validate directives, find un-annotated network/fs/secret call sites, optionally check a policy file.
     Lint {
+        /// Files or directories to process (default: the whole root).
         paths: Vec<PathBuf>,
         /// Also parse and semantically check this policy.yaml.
         #[arg(long)]
@@ -75,8 +78,18 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Generate the reference docs (CLI.md, DIRECTIVES.md) from the code; `--check` fails if the committed ones are stale.
+    Docs {
+        /// Output directory.
+        #[arg(long, default_value = "docs")]
+        out: PathBuf,
+        /// Do not write; exit 1 when the files in --out differ from what the code generates.
+        #[arg(long)]
+        check: bool,
+    },
     /// Compare the policy generated from directives with a committed policy.yaml (CI gate).
     Drift {
+        /// Files or directories to process (default: the whole root).
         paths: Vec<PathBuf>,
         #[arg(long)]
         policy: PathBuf,
@@ -142,6 +155,18 @@ fn report_parse_errors(s: &Scan) -> bool {
 }
 
 fn run(cli: Cli) -> Result<ExitCode> {
+    if let Cmd::Docs { out, check } = &cli.cmd {
+        let cmd = Cli::command();
+        if *check {
+            openshell_annotate::docs::check(&cmd, out)?;
+            eprintln!("docs: {} is up to date", out.display());
+        } else {
+            for f in openshell_annotate::docs::write(&cmd, out)? {
+                eprintln!("wrote {f}");
+            }
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
     let root = cli
         .root
         .canonicalize()
@@ -368,6 +393,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let bad = !rep.suggestions.is_empty() || (deny_stale && !rep.stale.is_empty());
             Ok(ExitCode::from(u8::from(bad)))
         }
+        Cmd::Docs { .. } => unreachable!("handled above"),
         Cmd::Drift {
             paths,
             policy,

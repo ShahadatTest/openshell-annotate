@@ -33,6 +33,8 @@ Exit codes: 0 clean, 1 findings/errors, 2 usage or I/O error.
 
 ## Directive grammar
 
+Full reference, generated from the code: [docs/DIRECTIVES.md](docs/DIRECTIVES.md) (directives and attributes) and [docs/CLI.md](docs/CLI.md) (every subcommand and flag). Regenerate with `scripts/gen-docs.sh`; `cargo test` fails when they are stale. Summary:
+
 ```ebnf
 directive = "@openshell" , ws , body ;                 (* first thing in a comment line *)
 body      = egress | provider | fs | bin | process | ignore ;
@@ -108,3 +110,12 @@ exclude = []               # same pattern syntax as [lint].exclude
 ```
 cargo test
 ```
+
+## Docker (local build)
+
+```
+scripts/docker-build.sh                      # builds openshell-annotate:dev (~35 MB, distroless/cc, never pushed)
+docker run --rm -u $(id -u):$(id -g) -v "$PWD":/src openshell-annotate:dev lint
+docker run --rm -v "$PWD":/src openshell-annotate:dev scan
+```
+Entrypoint is `openshell-annotate`, workdir `/src`. The build needs the OpenShell checkout (`OPENSHELL_SRC`, default `~/src/OpenShell`) for `openshell-policy-schema`.

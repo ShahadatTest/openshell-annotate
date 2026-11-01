@@ -1,24 +1,13 @@
 //! `@openshell` directive grammar and parser.
 //!
-//! ```ebnf
-//! directive = "@openshell" , ws , body ;
-//! body      = egress | provider | fs | bin | process | ignore ;
-//! egress    = "egress" , ws , target , { ws , attr } ;
-//! target    = host , ":" , ports ;            (* port is mandatory *)
-//! ports     = port , { "," , port } ;
-//! provider  = "provider" , ws , env-name , { ws , attr } ;
-//! fs        = "fs" , ws , ( "read" | "write" ) , ws , path , { ws , attr } ;
-//! bin       = "bin" , ws , path , { ws , attr } ;
-//! process   = "process" , { ws , attr } ;
-//! ignore    = "ignore" , { ws , attr } ;
-//! attr      = key , "=" , value ;
-//! value     = bare | '"' , { any - '"' | '\"' } , '"' ;
-//! ```
+//! The grammar and the per-verb attribute tables live in [`crate::spec`] (single source of truth, also used to
+//! generate `docs/DIRECTIVES.md`).
 //!
 //! A directive must be the first thing in a comment line (after the comment
 //! leader), so prose that merely mentions `@openshell` is ignored.
 
 use crate::lexer::{Comment, Language};
+use crate::spec;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -232,20 +221,13 @@ fn tokenize(s: &str) -> Result<Vec<Tok>, String> {
     Ok(out)
 }
 
-const SINGLE_COMMON: &[&str] = &["reason", "scope"];
-
-fn allowed_attrs(verb: &str) -> (&'static [&'static str], &'static [&'static str]) {
-    match verb {
-        "egress" => (
-            &["access", "protocol", "enforce", "bin", "rule", "tls"],
-            &["allow", "deny"],
+fn allowed_attrs(verb: &str) -> (Vec<&'static str>, Vec<&'static str>) {
+    match spec::verb(verb) {
+        Some(v) => (
+            v.attrs.iter().filter(|a| !a.multi).map(|a| a.name).chain(spec::COMMON_ATTRS.iter().map(|a| a.name)).collect(),
+            v.attrs.iter().filter(|a| a.multi).map(|a| a.name).collect(),
         ),
-        "provider" => (&["profile", "name"], &[]),
-        "fs" => (&[], &[]),
-        "bin" => (&[], &[]),
-        "process" => (&["user", "group"], &[]),
-        "ignore" => (&["kind", "host"], &[]),
-        _ => (&[], &[]),
+        None => (vec![], vec![]),
     }
 }
 
@@ -254,8 +236,8 @@ fn parse_body(body: &str) -> Result<(Kind, Attrs), String> {
     let mut it = toks.into_iter();
     let verb = match it.next() {
         Some(Tok::Word(w)) => w,
-        Some(Tok::Pair(k, _)) => return Err(format!("expected a directive keyword (egress, provider, fs, bin, process, ignore), found attribute `{k}=`")),
-        None => return Err("empty directive; expected egress, provider, fs, bin, process or ignore".into()),
+        Some(Tok::Pair(k, _)) => return Err(format!("expected a directive keyword ({}), found attribute `{k}=`", spec::verb_names())),
+        None => return Err(format!("empty directive; expected one of: {}", spec::verb_names())),
     };
     let mut words = Vec::new();
     let mut attrs = Attrs {
@@ -263,12 +245,10 @@ fn parse_body(body: &str) -> Result<(Kind, Attrs), String> {
         multi: BTreeMap::new(),
     };
     let (single_ok, multi_ok) = allowed_attrs(&verb);
-    if !matches!(
-        verb.as_str(),
-        "egress" | "provider" | "fs" | "bin" | "process" | "ignore"
-    ) {
+    if spec::verb(&verb).is_none() {
         return Err(format!(
-            "unknown directive `{verb}`; expected egress, provider, fs, bin, process or ignore"
+            "unknown directive `{verb}`; expected one of: {}",
+            spec::verb_names()
         ));
     }
     for t in it {
@@ -277,7 +257,7 @@ fn parse_body(body: &str) -> Result<(Kind, Attrs), String> {
             Tok::Pair(k, v) => {
                 if multi_ok.contains(&k.as_str()) {
                     attrs.multi.entry(k).or_default().push(v);
-                } else if single_ok.contains(&k.as_str()) || SINGLE_COMMON.contains(&k.as_str()) {
+                } else if single_ok.contains(&k.as_str()) {
                     if attrs.single.insert(k.clone(), v).is_some() {
                         return Err(format!("duplicate attribute `{k}`"));
                     }
@@ -301,12 +281,12 @@ fn parse_body(body: &str) -> Result<(Kind, Attrs), String> {
     }
     let kind = match verb.as_str() {
         "egress" => {
-            need(1, "egress <host>:<port>[,<port>...] reason=\"...\" [access=read-only|read-write|full] [protocol=rest|...] [allow=\"METHOD:/path\"]... [bin=/path] [rule=name] [enforce=enforce|audit] [tls=skip]")?;
+            need(1, spec::verb("egress").unwrap().usage)?;
             let (host, ports) = parse_target(&words[0])?;
             Kind::Egress { host, ports }
         }
         "provider" => {
-            need(1, "provider <ENV_VAR> [profile=<id>] [name=<instance>]")?;
+            need(1, spec::verb("provider").unwrap().usage)?;
             let env = words[0].clone();
             if !valid_env(&env) {
                 return Err(format!(
@@ -316,7 +296,7 @@ fn parse_body(body: &str) -> Result<(Kind, Attrs), String> {
             Kind::Provider { env }
         }
         "fs" => {
-            need(2, "fs read|write <absolute-path> reason=\"...\"")?;
+            need(2, spec::verb("fs").unwrap().usage)?;
             let write = match words[0].as_str() {
                 "read" => false,
                 "write" => true,
@@ -328,20 +308,17 @@ fn parse_body(body: &str) -> Result<(Kind, Attrs), String> {
             }
         }
         "bin" => {
-            need(1, "bin <absolute-path-of-interpreter-or-binary>")?;
+            need(1, spec::verb("bin").unwrap().usage)?;
             Kind::Bin {
                 path: words[0].clone(),
             }
         }
         "process" => {
-            need(0, "process [user=<sandbox|uid>] [group=<sandbox|gid>]")?;
+            need(0, spec::verb("process").unwrap().usage)?;
             Kind::Process
         }
         "ignore" => {
-            need(
-                0,
-                "ignore kind=net|fs|env|exec|all reason=\"...\" [scope=file]",
-            )?;
+            need(0, spec::verb("ignore").unwrap().usage)?;
             if let Some(k) = attrs.single.get("kind") {
                 if !matches!(k.as_str(), "net" | "fs" | "env" | "exec" | "all") {
                     return Err(format!(
