@@ -36,7 +36,10 @@ pub struct Site {
 
 fn temp_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?i)tmp|tempdir|tempfile|temp_|mkdtemp|mktemp|mkstemp|createtemp|\btemp\b").unwrap())
+    RE.get_or_init(|| {
+        Regex::new(r"(?i)tmp|tempdir|tempfile|temp_|mkdtemp|mktemp|mkstemp|createtemp|\btemp\b")
+            .unwrap()
+    })
 }
 
 fn txt<'a>(n: Node, src: &'a str) -> &'a str {
@@ -64,12 +67,14 @@ const SUBST_KINDS: &[&str] = &[
 
 fn has_subst(n: Node) -> bool {
     let mut c = n.walk();
-    let r = n.named_children(&mut c).any(|k| SUBST_KINDS.contains(&k.kind()));
+    let r = n
+        .named_children(&mut c)
+        .any(|k| SUBST_KINDS.contains(&k.kind()));
     r
 }
 
 fn strip_quotes(t: &str) -> String {
-    let t = t.trim_start_matches(|c: char| matches!(c, 'r' | 'R' | 'b' | 'B' | 'f' | 'F' | 'u' | 'U'));
+    let t = t.trim_start_matches(['r', 'R', 'b', 'B', 'f', 'F', 'u', 'U']);
     for q in ["\"\"\"", "'''"] {
         if t.len() >= 6 && t.starts_with(q) && t.ends_with(q) {
             return t[3..t.len() - 3].to_string();
@@ -92,7 +97,9 @@ fn str_lit(n: Node, src: &str) -> Option<String> {
 }
 
 fn named_args<'t>(call: Node<'t>) -> Vec<Node<'t>> {
-    let Some(a) = call.child_by_field_name("arguments") else { return vec![] };
+    let Some(a) = call.child_by_field_name("arguments") else {
+        return vec![];
+    };
     let mut c = a.walk();
     let v = a
         .named_children(&mut c)
@@ -109,7 +116,11 @@ fn under(p: &str, root: &str) -> bool {
 /// Classify the path-valued argument of a write.
 fn classify_path(n: Node, src: &str) -> Pth {
     if let Some(s) = str_lit(n, src) {
-        return if s.starts_with('/') { Pth::Literal(s) } else { Pth::Dynamic };
+        return if s.starts_with('/') {
+            Pth::Literal(s)
+        } else {
+            Pth::Dynamic
+        };
     }
     let t = txt(n, src);
     // `path.join("/abs", x)` / `os.path.join("/abs", x)` / `Path("/abs")`: the first literal argument decides.
@@ -142,9 +153,7 @@ pub fn is_covered_path(p: &Pth, fs_roots: &[String]) -> bool {
         Pth::Temp => true,
         Pth::Dynamic => false,
         Pth::Literal(s) => {
-            under(s, "/tmp")
-                || s == "/dev/null"
-                || fs_roots.iter().any(|r| under(s, r))
+            under(s, "/tmp") || s == "/dev/null" || fs_roots.iter().any(|r| under(s, r))
         }
     }
 }
@@ -238,12 +247,18 @@ pub fn comments(lang: Language, rel: &str, text: &str) -> Option<Vec<crate::lexe
             for (i, l) in t.lines().enumerate() {
                 let l = l.trim();
                 let l = if i == 0 {
-                    l.strip_prefix("//").or_else(|| l.strip_prefix("/*")).or_else(|| l.strip_prefix('#')).unwrap_or(l)
+                    l.strip_prefix("//")
+                        .or_else(|| l.strip_prefix("/*"))
+                        .or_else(|| l.strip_prefix('#'))
+                        .unwrap_or(l)
                 } else {
                     l.strip_prefix('*').unwrap_or(l)
                 };
                 let l = l.strip_suffix("*/").unwrap_or(l);
-                out.push(crate::lexer::Comment { line: first + i, text: l.to_string() });
+                out.push(crate::lexer::Comment {
+                    line: first + i,
+                    text: l.to_string(),
+                });
             }
         } else if cur.goto_first_child() {
             continue 'outer;
@@ -281,20 +296,26 @@ fn url_literal(n: Node, src: &str, out: &mut Vec<Site>) {
 
 fn js_dotted(n: Node, src: &str) -> Option<String> {
     match n.kind() {
-        "identifier" | "property_identifier" | "this" | "shorthand_property_identifier" => Some(txt(n, src).to_string()),
+        "identifier" | "property_identifier" | "this" | "shorthand_property_identifier" => {
+            Some(txt(n, src).to_string())
+        }
         "member_expression" => {
             let o = js_dotted(n.child_by_field_name("object")?, src)?;
             let p = n.child_by_field_name("property")?;
             Some(format!("{o}.{}", txt(p, src)))
         }
-        "non_null_expression" | "parenthesized_expression" | "as_expression" => js_dotted(n.named_child(0)?, src),
+        "non_null_expression" | "parenthesized_expression" | "as_expression" => {
+            js_dotted(n.named_child(0)?, src)
+        }
         _ => None,
     }
 }
 
 fn js_member_parts(n: Node, src: &str) -> Option<(Option<String>, String)> {
     if n.kind() == "member_expression" {
-        let obj = n.child_by_field_name("object").and_then(|o| js_dotted(o, src));
+        let obj = n
+            .child_by_field_name("object")
+            .and_then(|o| js_dotted(o, src));
         let prop = txt(n.child_by_field_name("property")?, src).to_string();
         Some((obj, prop))
     } else {
@@ -303,21 +324,69 @@ fn js_member_parts(n: Node, src: &str) -> Option<(Option<String>, String)> {
 }
 
 const JS_FS_BARE: &[&str] = &[
-    "writeFile", "writeFileSync", "appendFile", "appendFileSync", "createWriteStream", "mkdirSync",
-    "mkdtemp", "mkdtempSync", "copyFileSync", "rmSync", "unlinkSync", "renameSync",
+    "writeFile",
+    "writeFileSync",
+    "appendFile",
+    "appendFileSync",
+    "createWriteStream",
+    "mkdirSync",
+    "mkdtemp",
+    "mkdtempSync",
+    "copyFileSync",
+    "rmSync",
+    "unlinkSync",
+    "renameSync",
 ];
 const JS_FS_MEMBER: &[&str] = &[
-    "writeFile", "writeFileSync", "appendFile", "appendFileSync", "createWriteStream", "mkdir", "mkdirSync",
-    "mkdtemp", "mkdtempSync", "unlink", "unlinkSync", "rename", "renameSync", "copyFile", "copyFileSync", "rm",
-    "rmSync", "cp", "cpSync", "truncate", "truncateSync", "symlink", "symlinkSync", "outputFile", "outputFileSync",
-    "ensureDir", "emptyDir", "move", "copy",
+    "writeFile",
+    "writeFileSync",
+    "appendFile",
+    "appendFileSync",
+    "createWriteStream",
+    "mkdir",
+    "mkdirSync",
+    "mkdtemp",
+    "mkdtempSync",
+    "unlink",
+    "unlinkSync",
+    "rename",
+    "renameSync",
+    "copyFile",
+    "copyFileSync",
+    "rm",
+    "rmSync",
+    "cp",
+    "cpSync",
+    "truncate",
+    "truncateSync",
+    "symlink",
+    "symlinkSync",
+    "outputFile",
+    "outputFileSync",
+    "ensureDir",
+    "emptyDir",
+    "move",
+    "copy",
 ];
-const JS_FS_TWO_PATH: &[&str] = &["copyFile", "copyFileSync", "rename", "renameSync", "cp", "cpSync", "symlink", "symlinkSync", "move", "copy"];
+const JS_FS_TWO_PATH: &[&str] = &[
+    "copyFile",
+    "copyFileSync",
+    "rename",
+    "renameSync",
+    "cp",
+    "cpSync",
+    "symlink",
+    "symlinkSync",
+    "move",
+    "copy",
+];
 
 fn js_fs_object(o: &str) -> bool {
     let last = o.rsplit('.').next().unwrap_or(o).to_ascii_lowercase();
-    matches!(last.as_str(), "fs" | "fsp" | "fspromises" | "promises" | "fse" | "fsextra" | "fsx" | "nodefs")
-        || last.ends_with("fs")
+    matches!(
+        last.as_str(),
+        "fs" | "fsp" | "fspromises" | "promises" | "fse" | "fsextra" | "fsx" | "nodefs"
+    ) || last.ends_with("fs")
         || o.to_ascii_lowercase().ends_with("fs.promises")
 }
 
@@ -325,13 +394,21 @@ fn js_fs_object(o: &str) -> bool {
 type FsImports = std::collections::BTreeMap<String, String>;
 
 fn is_fs_module(m: &str) -> bool {
-    matches!(m.trim_start_matches("node:"), "fs" | "fs/promises" | "fs-extra" | "graceful-fs")
+    matches!(
+        m.trim_start_matches("node:"),
+        "fs" | "fs/promises" | "fs-extra" | "graceful-fs"
+    )
 }
 
 fn js(n: Node, src: &str, out: &mut Vec<Site>, imp: &mut FsImports) {
     match n.kind() {
         "import_statement" => {
-            let Some(m) = n.child_by_field_name("source").and_then(|x| str_lit(x, src)) else { return };
+            let Some(m) = n
+                .child_by_field_name("source")
+                .and_then(|x| str_lit(x, src))
+            else {
+                return;
+            };
             if !is_fs_module(&m) {
                 return;
             }
@@ -349,7 +426,9 @@ fn js(n: Node, src: &str, out: &mut Vec<Site>, imp: &mut FsImports) {
             }
         }
         "new_expression" => {
-            let Some(c) = n.child_by_field_name("constructor") else { return };
+            let Some(c) = n.child_by_field_name("constructor") else {
+                return;
+            };
             let Some(d) = js_dotted(c, src) else { return };
             let what = match d.as_str() {
                 "WebSocket" | "ws.WebSocket" => "WebSocket client",
@@ -362,14 +441,20 @@ fn js(n: Node, src: &str, out: &mut Vec<Site>, imp: &mut FsImports) {
             out[i].urls = urls_in(&args, src);
         }
         "call_expression" => {
-            let Some(f) = n.child_by_field_name("function") else { return };
+            let Some(f) = n.child_by_field_name("function") else {
+                return;
+            };
             let args = named_args(n);
             let dotted = js_dotted(f, src);
             let parts = js_member_parts(f, src);
             if let Some(d) = &dotted {
                 let net = match d.as_str() {
-                    "fetch" | "globalThis.fetch" | "window.fetch" | "self.fetch" | "undici.fetch" | "undici.request" => Some("fetch()"),
-                    "http.request" | "http.get" | "https.request" | "https.get" | "http2.connect" | "httpRequest" | "httpsRequest" => Some("node http(s) request"),
+                    "fetch" | "globalThis.fetch" | "window.fetch" | "self.fetch"
+                    | "undici.fetch" | "undici.request" => Some("fetch()"),
+                    "http.request" | "http.get" | "https.request" | "https.get"
+                    | "http2.connect" | "httpRequest" | "httpsRequest" => {
+                        Some("node http(s) request")
+                    }
                     "net.connect" | "net.createConnection" | "tls.connect" => Some("raw socket"),
                     x if x == "axios" || x.starts_with("axios.") => Some("axios"),
                     _ => None,
@@ -378,22 +463,51 @@ fn js(n: Node, src: &str, out: &mut Vec<Site>, imp: &mut FsImports) {
                     let i = push(out, n, "net", w);
                     out[i].urls = urls_in(&args, src);
                 }
-                let exec = matches!(d.as_str(), "spawn" | "spawnSync" | "execFile" | "execFileSync" | "execSync" | "fork" | "execa" | "execaSync")
-                    || matches!(parts.as_ref().and_then(|p| p.0.as_deref()), Some("child_process" | "cp" | "childProcess" | "execa" | "node:child_process"));
+                let exec = matches!(
+                    d.as_str(),
+                    "spawn"
+                        | "spawnSync"
+                        | "execFile"
+                        | "execFileSync"
+                        | "execSync"
+                        | "fork"
+                        | "execa"
+                        | "execaSync"
+                ) || matches!(
+                    parts.as_ref().and_then(|p| p.0.as_deref()),
+                    Some("child_process" | "cp" | "childProcess" | "execa" | "node:child_process")
+                );
                 if exec {
                     push(out, n, "exec", "subprocess");
                 }
             }
             // fs writes
             let fs_name = match (&parts, &dotted) {
-                (Some((Some(obj), name)), _) if js_fs_object(obj) && JS_FS_MEMBER.contains(&name.as_str()) => Some(name.clone()),
-                (None, Some(d)) if imp.get(d).map_or(false, |o| JS_FS_MEMBER.contains(&o.as_str())) => imp.get(d).cloned(),
+                (Some((Some(obj), name)), _)
+                    if js_fs_object(obj) && JS_FS_MEMBER.contains(&name.as_str()) =>
+                {
+                    Some(name.clone())
+                }
+                (None, Some(d))
+                    if imp
+                        .get(d)
+                        .is_some_and(|o| JS_FS_MEMBER.contains(&o.as_str())) =>
+                {
+                    imp.get(d).cloned()
+                }
                 (None, Some(d)) if JS_FS_BARE.contains(&d.as_str()) => Some(d.clone()),
                 _ => None,
             };
             if let Some(name) = fs_name {
-                let idx = if JS_FS_TWO_PATH.contains(&name.as_str()) { 1.min(args.len().saturating_sub(1)) } else { 0 };
-                let p = args.get(idx).map(|a| classify_path(*a, src)).unwrap_or(Pth::Dynamic);
+                let idx = if JS_FS_TWO_PATH.contains(&name.as_str()) {
+                    1.min(args.len().saturating_sub(1))
+                } else {
+                    0
+                };
+                let p = args
+                    .get(idx)
+                    .map(|a| classify_path(*a, src))
+                    .unwrap_or(Pth::Dynamic);
                 let i = push(out, n, "fs", format!("filesystem write ({name})"));
                 out[i].path = Some(p);
             }
@@ -410,7 +524,10 @@ fn js(n: Node, src: &str, out: &mut Vec<Site>, imp: &mut FsImports) {
             }
         }
         "subscript_expression" => {
-            if let (Some(o), Some(ix)) = (n.child_by_field_name("object"), n.child_by_field_name("index")) {
+            if let (Some(o), Some(ix)) = (
+                n.child_by_field_name("object"),
+                n.child_by_field_name("index"),
+            ) {
                 if js_dotted(o, src).as_deref() == Some("process.env") {
                     let i = push(out, n, "env", "environment read");
                     out[i].env = str_lit(ix, src);
@@ -419,18 +536,38 @@ fn js(n: Node, src: &str, out: &mut Vec<Site>, imp: &mut FsImports) {
         }
         "variable_declarator" => {
             // const { A, B: b } = process.env
-            let (Some(name), Some(val)) = (n.child_by_field_name("name"), n.child_by_field_name("value")) else { return };
+            let (Some(name), Some(val)) = (
+                n.child_by_field_name("name"),
+                n.child_by_field_name("value"),
+            ) else {
+                return;
+            };
             // const { mkdir } = require("node:fs/promises")
-            let req = if val.kind() == "await_expression" { val.named_child(0).unwrap_or(val) } else { val };
+            let req = if val.kind() == "await_expression" {
+                val.named_child(0).unwrap_or(val)
+            } else {
+                val
+            };
             if name.kind() == "object_pattern" && req.kind() == "call_expression" {
-                let is_req = req.child_by_field_name("function").map_or(false, |f| matches!(txt(f, src), "require" | "import"));
-                if is_req && named_args(req).first().and_then(|a| str_lit(*a, src)).map_or(false, |m| is_fs_module(&m)) {
+                let is_req = req
+                    .child_by_field_name("function")
+                    .is_some_and(|f| matches!(txt(f, src), "require" | "import"));
+                if is_req
+                    && named_args(req)
+                        .first()
+                        .and_then(|a| str_lit(*a, src))
+                        .is_some_and(|m| is_fs_module(&m))
+                {
                     let mut c = name.walk();
                     for k in name.named_children(&mut c) {
                         match k.kind() {
-                            "shorthand_property_identifier_pattern" => { imp.insert(txt(k, src).to_string(), txt(k, src).to_string()); }
+                            "shorthand_property_identifier_pattern" => {
+                                imp.insert(txt(k, src).to_string(), txt(k, src).to_string());
+                            }
                             "pair_pattern" => {
-                                if let (Some(key), Some(v)) = (k.child_by_field_name("key"), k.child_by_field_name("value")) {
+                                if let (Some(key), Some(v)) =
+                                    (k.child_by_field_name("key"), k.child_by_field_name("value"))
+                                {
                                     imp.insert(txt(v, src).to_string(), txt(key, src).to_string());
                                 }
                             }
@@ -439,13 +576,19 @@ fn js(n: Node, src: &str, out: &mut Vec<Site>, imp: &mut FsImports) {
                     }
                 }
             }
-            if name.kind() == "object_pattern" && js_dotted(val, src).as_deref() == Some("process.env") {
+            if name.kind() == "object_pattern"
+                && js_dotted(val, src).as_deref() == Some("process.env")
+            {
                 let mut c = name.walk();
                 for k in name.named_children(&mut c) {
                     let key = match k.kind() {
                         "shorthand_property_identifier_pattern" => Some(txt(k, src).to_string()),
-                        "pair_pattern" => k.child_by_field_name("key").map(|x| txt(x, src).to_string()),
-                        "object_assignment_pattern" => k.child_by_field_name("left").map(|x| txt(x, src).to_string()),
+                        "pair_pattern" => k
+                            .child_by_field_name("key")
+                            .map(|x| txt(x, src).to_string()),
+                        "object_assignment_pattern" => k
+                            .child_by_field_name("left")
+                            .map(|x| txt(x, src).to_string()),
                         _ => None,
                     };
                     if let Some(key) = key {
@@ -466,7 +609,10 @@ fn py_dotted(n: Node, src: &str) -> Option<String> {
         "identifier" => Some(txt(n, src).to_string()),
         "attribute" => {
             let o = py_dotted(n.child_by_field_name("object")?, src)?;
-            Some(format!("{o}.{}", txt(n.child_by_field_name("attribute")?, src)))
+            Some(format!(
+                "{o}.{}",
+                txt(n.child_by_field_name("attribute")?, src)
+            ))
         }
         _ => None,
     }
@@ -485,20 +631,62 @@ fn py_kwarg<'t>(args: &[Node<'t>], name: &str, src: &str) -> Option<Node<'t>> {
 fn py(n: Node, src: &str, out: &mut Vec<Site>) {
     match n.kind() {
         "call" => {
-            let Some(f) = n.child_by_field_name("function") else { return };
+            let Some(f) = n.child_by_field_name("function") else {
+                return;
+            };
             let args = named_args(n);
             let dotted = py_dotted(f, src);
-            let last = if f.kind() == "attribute" { f.child_by_field_name("attribute").map(|x| txt(x, src).to_string()) } else { dotted.clone() };
+            let last = if f.kind() == "attribute" {
+                f.child_by_field_name("attribute")
+                    .map(|x| txt(x, src).to_string())
+            } else {
+                dotted.clone()
+            };
             if let Some(d) = &dotted {
                 let net = if let Some(rest) = d.strip_prefix("requests.") {
-                    matches!(rest, "get" | "post" | "put" | "patch" | "delete" | "head" | "request" | "Session").then_some("requests")
+                    matches!(
+                        rest,
+                        "get"
+                            | "post"
+                            | "put"
+                            | "patch"
+                            | "delete"
+                            | "head"
+                            | "request"
+                            | "Session"
+                    )
+                    .then_some("requests")
                 } else if let Some(rest) = d.strip_prefix("httpx.") {
-                    matches!(rest, "get" | "post" | "put" | "patch" | "delete" | "head" | "request" | "stream" | "Client" | "AsyncClient").then_some("httpx")
-                } else if matches!(d.as_str(), "urllib.request.urlopen" | "urllib.request.Request" | "urlopen" | "request.urlopen") {
+                    matches!(
+                        rest,
+                        "get"
+                            | "post"
+                            | "put"
+                            | "patch"
+                            | "delete"
+                            | "head"
+                            | "request"
+                            | "stream"
+                            | "Client"
+                            | "AsyncClient"
+                    )
+                    .then_some("httpx")
+                } else if matches!(
+                    d.as_str(),
+                    "urllib.request.urlopen"
+                        | "urllib.request.Request"
+                        | "urlopen"
+                        | "request.urlopen"
+                ) {
                     Some("urllib")
                 } else if matches!(d.as_str(), "aiohttp.ClientSession") {
                     Some("aiohttp")
-                } else if matches!(d.as_str(), "socket.create_connection" | "websockets.connect" | "websocket.create_connection") {
+                } else if matches!(
+                    d.as_str(),
+                    "socket.create_connection"
+                        | "websockets.connect"
+                        | "websocket.create_connection"
+                ) {
                     Some("raw socket")
                 } else {
                     None
@@ -510,31 +698,62 @@ fn py(n: Node, src: &str, out: &mut Vec<Site>) {
                 if d.starts_with("subprocess.") || matches!(d.as_str(), "os.system" | "os.popen") {
                     push(out, n, "exec", "subprocess");
                 }
-                if matches!(d.as_str(), "os.getenv" | "os.environ.get" | "environ.get" | "getenv") {
+                if matches!(
+                    d.as_str(),
+                    "os.getenv" | "os.environ.get" | "environ.get" | "getenv"
+                ) {
                     let i = push(out, n, "env", "environment read");
                     out[i].env = args.first().and_then(|a| str_lit(*a, src));
                 }
                 // fs
                 let is_open = matches!(d.as_str(), "open" | "io.open" | "codecs.open");
                 if is_open {
-                    let mode = args.get(1).copied().or_else(|| py_kwarg(&args, "mode", src));
-                    let writes = mode.and_then(|m| str_lit(m, src)).map_or(false, |m| m.chars().any(|c| matches!(c, 'w' | 'a' | 'x' | '+')));
+                    let mode = args
+                        .get(1)
+                        .copied()
+                        .or_else(|| py_kwarg(&args, "mode", src));
+                    let writes = mode
+                        .and_then(|m| str_lit(m, src))
+                        .is_some_and(|m| m.chars().any(|c| matches!(c, 'w' | 'a' | 'x' | '+')));
                     if writes {
-                        let p = args.first().map(|a| classify_path(*a, src)).unwrap_or(Pth::Dynamic);
+                        let p = args
+                            .first()
+                            .map(|a| classify_path(*a, src))
+                            .unwrap_or(Pth::Dynamic);
                         let i = push(out, n, "fs", "open() for writing");
                         out[i].path = Some(p);
                     }
                 } else if let Some(rest) = d.strip_prefix("shutil.") {
-                    if matches!(rest, "copy" | "copy2" | "copyfile" | "copytree" | "move" | "rmtree") {
-                        let idx = if rest == "rmtree" { 0 } else { 1.min(args.len().saturating_sub(1)) };
-                        let p = args.get(idx).map(|a| classify_path(*a, src)).unwrap_or(Pth::Dynamic);
+                    if matches!(
+                        rest,
+                        "copy" | "copy2" | "copyfile" | "copytree" | "move" | "rmtree"
+                    ) {
+                        let idx = if rest == "rmtree" {
+                            0
+                        } else {
+                            1.min(args.len().saturating_sub(1))
+                        };
+                        let p = args
+                            .get(idx)
+                            .map(|a| classify_path(*a, src))
+                            .unwrap_or(Pth::Dynamic);
                         let i = push(out, n, "fs", format!("filesystem write (shutil.{rest})"));
                         out[i].path = Some(p);
                     }
                 } else if let Some(rest) = d.strip_prefix("os.") {
-                    if matches!(rest, "remove" | "rename" | "replace" | "makedirs" | "mkdir" | "unlink" | "rmdir") {
-                        let idx = if matches!(rest, "rename" | "replace") { 1.min(args.len().saturating_sub(1)) } else { 0 };
-                        let p = args.get(idx).map(|a| classify_path(*a, src)).unwrap_or(Pth::Dynamic);
+                    if matches!(
+                        rest,
+                        "remove" | "rename" | "replace" | "makedirs" | "mkdir" | "unlink" | "rmdir"
+                    ) {
+                        let idx = if matches!(rest, "rename" | "replace") {
+                            1.min(args.len().saturating_sub(1))
+                        } else {
+                            0
+                        };
+                        let p = args
+                            .get(idx)
+                            .map(|a| classify_path(*a, src))
+                            .unwrap_or(Pth::Dynamic);
                         let i = push(out, n, "fs", format!("filesystem write (os.{rest})"));
                         out[i].path = Some(p);
                     }
@@ -550,7 +769,10 @@ fn py(n: Node, src: &str, out: &mut Vec<Site>) {
             }
         }
         "subscript" => {
-            if let (Some(v), Some(s)) = (n.child_by_field_name("value"), n.child_by_field_name("subscript")) {
+            if let (Some(v), Some(s)) = (
+                n.child_by_field_name("value"),
+                n.child_by_field_name("subscript"),
+            ) {
                 if matches!(py_dotted(v, src).as_deref(), Some("os.environ" | "environ")) {
                     let i = push(out, n, "env", "environment read");
                     out[i].env = str_lit(s, src);
@@ -578,17 +800,37 @@ fn go(n: Node, src: &str, out: &mut Vec<Site>) {
     if n.kind() != "call_expression" {
         return;
     }
-    let Some(f) = n.child_by_field_name("function") else { return };
+    let Some(f) = n.child_by_field_name("function") else {
+        return;
+    };
     let Some(d) = go_dotted(f, src) else { return };
     let args = named_args(n);
     let net = match d.as_str() {
-        "http.Get" | "http.Post" | "http.PostForm" | "http.Head" | "http.NewRequest" | "http.NewRequestWithContext" | "http.DefaultClient.Get" | "http.DefaultClient.Do" | "http.DefaultClient.Post" => Some("net/http client"),
-        "net.Dial" | "net.DialTimeout" | "tls.Dial" | "websocket.Dial" | "websocket.DefaultDialer.Dial" => Some("raw socket"),
+        "http.Get"
+        | "http.Post"
+        | "http.PostForm"
+        | "http.Head"
+        | "http.NewRequest"
+        | "http.NewRequestWithContext"
+        | "http.DefaultClient.Get"
+        | "http.DefaultClient.Do"
+        | "http.DefaultClient.Post" => Some("net/http client"),
+        "net.Dial"
+        | "net.DialTimeout"
+        | "tls.Dial"
+        | "websocket.Dial"
+        | "websocket.DefaultDialer.Dial" => Some("raw socket"),
         _ => None,
     };
     if let Some(w) = net {
         let i = push(out, n, "net", w);
-        let from = if d == "http.NewRequest" { 1 } else if d == "http.NewRequestWithContext" { 2 } else { 0 };
+        let from = if d == "http.NewRequest" {
+            1
+        } else if d == "http.NewRequestWithContext" {
+            2
+        } else {
+            0
+        };
         out[i].urls = urls_in(&args[from.min(args.len())..], src);
     }
     if matches!(d.as_str(), "os.Getenv" | "os.LookupEnv") {
@@ -600,19 +842,28 @@ fn go(n: Node, src: &str, out: &mut Vec<Site>) {
     }
     if let Some(name) = d.strip_prefix("os.").or_else(|| d.strip_prefix("ioutil.")) {
         let write = match name {
-            "WriteFile" | "Create" | "MkdirAll" | "Mkdir" | "MkdirTemp" | "CreateTemp" | "Remove" | "RemoveAll" | "Rename" => true,
-            "OpenFile" => args.get(1).map_or(false, |f| {
+            "WriteFile" | "Create" | "MkdirAll" | "Mkdir" | "MkdirTemp" | "CreateTemp"
+            | "Remove" | "RemoveAll" | "Rename" => true,
+            "OpenFile" => args.get(1).is_some_and(|f| {
                 let t = txt(*f, src);
-                ["O_WRONLY", "O_RDWR", "O_CREATE", "O_APPEND", "O_TRUNC"].iter().any(|k| t.contains(k))
+                ["O_WRONLY", "O_RDWR", "O_CREATE", "O_APPEND", "O_TRUNC"]
+                    .iter()
+                    .any(|k| t.contains(k))
             }),
             _ => false,
         };
         if write {
-            let idx = if name == "Rename" { 1.min(args.len().saturating_sub(1)) } else { 0 };
+            let idx = if name == "Rename" {
+                1.min(args.len().saturating_sub(1))
+            } else {
+                0
+            };
             let p = if matches!(name, "MkdirTemp" | "CreateTemp") {
                 Pth::Temp
             } else {
-                args.get(idx).map(|a| classify_path(*a, src)).unwrap_or(Pth::Dynamic)
+                args.get(idx)
+                    .map(|a| classify_path(*a, src))
+                    .unwrap_or(Pth::Dynamic)
             };
             let i = push(out, n, "fs", format!("filesystem write (os.{name})"));
             out[i].path = Some(p);
@@ -651,16 +902,37 @@ fn sh_path(n: Node, src: &str) -> Pth {
 fn sh(n: Node, src: &str, out: &mut Vec<Site>) {
     match n.kind() {
         "command" => {
-            let Some(nm) = n.child_by_field_name("name") else { return };
+            let Some(nm) = n.child_by_field_name("name") else {
+                return;
+            };
             let name = txt(nm, src).rsplit('/').next().unwrap_or("").to_string();
             let args = sh_args(n);
-            let first = args.first().map(|a| txt(*a, src).to_string()).unwrap_or_default();
+            let first = args
+                .first()
+                .map(|a| txt(*a, src).to_string())
+                .unwrap_or_default();
             let net = match name.as_str() {
                 "curl" | "wget" => Some("curl/wget"),
-                "git" if matches!(first.as_str(), "clone" | "fetch" | "pull" | "push" | "ls-remote") => Some("git remote operation"),
-                "npm" | "pnpm" | "yarn" if matches!(first.as_str(), "install" | "i" | "add" | "ci" | "publish" | "view") => Some("package manager"),
+                "git"
+                    if matches!(
+                        first.as_str(),
+                        "clone" | "fetch" | "pull" | "push" | "ls-remote"
+                    ) =>
+                {
+                    Some("git remote operation")
+                }
+                "npm" | "pnpm" | "yarn"
+                    if matches!(
+                        first.as_str(),
+                        "install" | "i" | "add" | "ci" | "publish" | "view"
+                    ) =>
+                {
+                    Some("package manager")
+                }
                 "pip" | "pip3" if first == "install" => Some("package manager"),
-                "apt" | "apt-get" if matches!(first.as_str(), "install" | "update") => Some("package manager"),
+                "apt" | "apt-get" if matches!(first.as_str(), "install" | "update") => {
+                    Some("package manager")
+                }
                 "docker" if matches!(first.as_str(), "pull" | "push") => Some("container registry"),
                 _ => None,
             };
@@ -676,8 +948,26 @@ fn sh(n: Node, src: &str, out: &mut Vec<Site>) {
                 }
                 out[i].urls = v;
             }
-            if matches!(name.as_str(), "mkdir" | "rm" | "cp" | "mv" | "touch" | "tee" | "chmod" | "chown" | "ln" | "install" | "rsync" | "dd") {
-                let paths: Vec<Node> = args.iter().copied().filter(|a| !txt(*a, src).starts_with('-')).collect();
+            if matches!(
+                name.as_str(),
+                "mkdir"
+                    | "rm"
+                    | "cp"
+                    | "mv"
+                    | "touch"
+                    | "tee"
+                    | "chmod"
+                    | "chown"
+                    | "ln"
+                    | "install"
+                    | "rsync"
+                    | "dd"
+            ) {
+                let paths: Vec<Node> = args
+                    .iter()
+                    .copied()
+                    .filter(|a| !txt(*a, src).starts_with('-'))
+                    .collect();
                 if let Some(last) = paths.last() {
                     let i = push(out, n, "fs", format!("filesystem write ({name})"));
                     out[i].path = Some(sh_path(*last, src));
@@ -690,18 +980,27 @@ fn sh(n: Node, src: &str, out: &mut Vec<Site>) {
             if !(t.starts_with('>') || t.starts_with("&>")) || t.starts_with(">&") {
                 return;
             }
-            let Some(d) = n.child_by_field_name("destination") else { return };
+            let Some(d) = n.child_by_field_name("destination") else {
+                return;
+            };
             let dt = strip_quotes(txt(d, src));
-            if matches!(dt.as_str(), "/dev/null" | "/dev/stderr" | "/dev/stdout" | "/dev/tty") || dt.starts_with('&') || dt.parse::<u32>().is_ok() {
+            if matches!(
+                dt.as_str(),
+                "/dev/null" | "/dev/stderr" | "/dev/stdout" | "/dev/tty"
+            ) || dt.starts_with('&')
+                || dt.parse::<u32>().is_ok()
+            {
                 return;
             }
             let i = push(out, n, "fs", "output redirection");
             out[i].path = Some(sh_path(d, src));
         }
         "variable_name" => {
-            let parent_ok = n.parent().map_or(false, |p| matches!(p.kind(), "simple_expansion" | "expansion"));
+            let parent_ok = n
+                .parent()
+                .is_some_and(|p| matches!(p.kind(), "simple_expansion" | "expansion"));
             let t = txt(n, src);
-            if parent_ok && t.chars().next().map_or(false, |c| c.is_ascii_uppercase()) {
+            if parent_ok && t.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
                 let i = push(out, n, "env", "environment read");
                 out[i].env = Some(t.to_string());
             }

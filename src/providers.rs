@@ -117,7 +117,8 @@ pub struct ProvidersOut {
 
 pub fn resolve(dirs: &[Directive], cfg: &Config, profiles: &[Profile]) -> ProvidersOut {
     // env -> (explicit profile/name, sources)
-    let mut envs: BTreeMap<String, (Option<String>, Option<String>, Vec<String>)> = BTreeMap::new();
+    type EnvEntry = (Option<String>, Option<String>, Vec<String>);
+    let mut envs: BTreeMap<String, EnvEntry> = BTreeMap::new();
     for d in dirs {
         if let Kind::Provider { env } = &d.kind {
             let e = envs.entry(env.clone()).or_default();

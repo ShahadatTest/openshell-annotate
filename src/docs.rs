@@ -10,7 +10,11 @@ fn clean(s: &str) -> String {
 }
 
 fn help_of(cmd: &clap::Command) -> String {
-    let mut c = cmd.clone().term_width(100).max_term_width(100).color(clap::ColorChoice::Never);
+    let mut c = cmd
+        .clone()
+        .term_width(100)
+        .max_term_width(100)
+        .color(clap::ColorChoice::Never);
     clean(&c.render_long_help().to_string())
 }
 
@@ -33,7 +37,10 @@ pub fn cli_md(root: &clap::Command) -> String {
 
 /// All generated files: (file name, content).
 pub fn generate(root: &clap::Command) -> Vec<(&'static str, String)> {
-    vec![("CLI.md", cli_md(root)), ("DIRECTIVES.md", spec::directives_md())]
+    vec![
+        ("CLI.md", cli_md(root)),
+        ("DIRECTIVES.md", spec::directives_md()),
+    ]
 }
 
 /// Write the generated docs into `dir`.

@@ -387,7 +387,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 let touched = dl::write_suggestions(&rep, &root, &s, &observed_file)?;
                 eprintln!(
                     "wrote suggested directives to: {}",
-                    if touched.is_empty() { "(nothing)".into() } else { touched.join(", ") }
+                    if touched.is_empty() {
+                        "(nothing)".into()
+                    } else {
+                        touched.join(", ")
+                    }
                 );
             }
             let bad = !rep.suggestions.is_empty() || (deny_stale && !rep.stale.is_empty());

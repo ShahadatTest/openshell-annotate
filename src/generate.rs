@@ -138,13 +138,17 @@ fn mergeable(a: &Spec, b: &Spec) -> bool {
         && (!b.allow.is_empty() || !b.deny.is_empty())
 }
 
-pub(crate) fn find_bin(d: &Directive, bins: &[&Directive], cfg: &Config) -> Result<(String, String), String> {
+pub(crate) fn find_bin(
+    d: &Directive,
+    bins: &[&Directive],
+    cfg: &Config,
+) -> Result<(String, String), String> {
     if let Some(b) = d.attr("bin") {
         return Ok((b.to_string(), format!("bin= at {}", d.loc())));
     }
     let mut best: Option<&Directive> = None;
     for b in bins {
-        if b.file == d.file && b.line <= d.line && best.map_or(true, |x| b.line > x.line) {
+        if b.file == d.file && b.line <= d.line && best.is_none_or(|x| b.line > x.line) {
             best = Some(b);
         }
     }
@@ -183,7 +187,7 @@ fn key(k: &str) -> String {
     let ok = !k.is_empty()
         && k.chars()
             .next()
-            .map_or(false, |c| c.is_ascii_alphabetic() || c == '_')
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
         && k.chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
         && !matches!(
@@ -354,13 +358,19 @@ pub fn generate(
         let why = "OpenShell proxy baseline: needed to exec anything; the supervisor adds it only when network rules exist".to_string();
         for p in ["/usr", "/lib", "/etc", "/proc", "/dev/urandom"] {
             if !fs_read.contains_key(p) && !fs_write.contains_key(p) {
-                fs_read.entry(p.to_string()).or_default().push(("[policy].system_paths".to_string(), why.clone()));
+                fs_read
+                    .entry(p.to_string())
+                    .or_default()
+                    .push(("[policy].system_paths".to_string(), why.clone()));
             }
         }
         for p in ["/tmp", "/dev/null"] {
             if !fs_write.contains_key(p) {
                 fs_read.remove(p);
-                fs_write.entry(p.to_string()).or_default().push(("[policy].system_paths".to_string(), why.clone()));
+                fs_write
+                    .entry(p.to_string())
+                    .or_default()
+                    .push(("[policy].system_paths".to_string(), why.clone()));
             }
         }
     }
@@ -399,7 +409,7 @@ pub fn generate(
     for p in &prov.providers {
         for pe in &p.profile_endpoints {
             for (rk, acc) in &rules {
-                for ((h, ps), _) in &acc.eps {
+                for (h, ps) in acc.eps.keys() {
                     if ps.iter().any(|port| format!("{h}:{port}") == *pe) {
                         warnings.push(format!(
                             "egress {pe} (rule `{rk}`) duplicates an endpoint the `{}` provider profile adds when attached; keep it only if you want an explicit rule for the binaries listed",

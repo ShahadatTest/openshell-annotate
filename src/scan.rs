@@ -57,7 +57,7 @@ pub fn scan(root: &Path, paths: &[PathBuf], cfg: &Config) -> Result<Scan> {
             .git_exclude(true)
             .require_git(false);
         wb.filter_entry(|e| {
-            e.file_name().to_str().map_or(true, |n| {
+            e.file_name().to_str().is_none_or(|n| {
                 !(e.file_type().is_some_and(|t| t.is_dir()) && SKIP_DIRS.contains(&n))
             })
         });
@@ -74,7 +74,12 @@ pub fn scan(root: &Path, paths: &[PathBuf], cfg: &Config) -> Result<Scan> {
                 continue;
             }
             let rel = rel_path(root, path);
-            if cfg.scan.exclude.iter().any(|x| crate::config::path_matches(&rel, x)) {
+            if cfg
+                .scan
+                .exclude
+                .iter()
+                .any(|x| crate::config::path_matches(&rel, x))
+            {
                 continue;
             }
             files.push((rel, path.to_path_buf()));

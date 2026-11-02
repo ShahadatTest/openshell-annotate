@@ -365,9 +365,18 @@ fn lint_flags_unannotated_calls_and_honours_ignore() {
         !s.contains("src/raw.ts:6"),
         "strings/comments must not match: {s}"
     );
-    assert!(!s.contains("src/raw.ts:7"), "/tmp is covered by the sandbox baseline: {s}");
-    assert!(!s.contains("src/raw.ts:8"), "obj.fetch is a method, not the global fetch: {s}");
-    assert!(s.contains("outside the sandbox baseline (/tmp) and every declared fs write root"), "{s}");
+    assert!(
+        !s.contains("src/raw.ts:7"),
+        "/tmp is covered by the sandbox baseline: {s}"
+    );
+    assert!(
+        !s.contains("src/raw.ts:8"),
+        "obj.fetch is a method, not the global fetch: {s}"
+    );
+    assert!(
+        s.contains("outside the sandbox baseline (/tmp) and every declared fs write root"),
+        "{s}"
+    );
     assert_eq!(
         run(t.path(), &["lint", "--deny-warnings"]).status.code(),
         Some(1)
@@ -475,7 +484,16 @@ fn system_paths_are_added_when_there_are_no_network_rules() {
     let o = run(t.path(), &["generate"]);
     assert!(o.status.success(), "{}", err(&o));
     let y = out(&o);
-    for p in ["\"/usr\"", "\"/lib\"", "\"/etc\"", "\"/proc\"", "\"/dev/urandom\"", "\"/tmp\"", "\"/dev/null\"", "\"/data/out\""] {
+    for p in [
+        "\"/usr\"",
+        "\"/lib\"",
+        "\"/etc\"",
+        "\"/proc\"",
+        "\"/dev/urandom\"",
+        "\"/tmp\"",
+        "\"/dev/null\"",
+        "\"/data/out\"",
+    ] {
         assert!(y.contains(p), "missing {p} in\n{y}");
     }
 }
@@ -484,10 +502,17 @@ fn system_paths_are_added_when_there_are_no_network_rules() {
 fn system_paths_never_leaves_the_policy_as_annotated() {
     let t = fs_only_repo("[policy]\nsystem_paths = \"never\"\n");
     let y = out(&run(t.path(), &["generate"]));
-    assert!(y.contains("\"/data/out\"") && !y.contains("\"/usr\""), "{y}");
+    assert!(
+        y.contains("\"/data/out\"") && !y.contains("\"/usr\""),
+        "{y}"
+    );
     let bad = fs_only_repo("[policy]\nsystem_paths = \"sometimes\"\n");
     let o = run(bad.path(), &["generate"]);
-    assert!(!o.status.success() && err(&o).contains("system_paths"), "{}", err(&o));
+    assert!(
+        !o.status.success() && err(&o).contains("system_paths"),
+        "{}",
+        err(&o)
+    );
 }
 
 #[test]
@@ -499,26 +524,44 @@ fn process_only_policy_still_gets_a_runnable_filesystem() {
     )
     .unwrap();
     let y = out(&run(t.path(), &["generate"]));
-    assert!(y.contains("run_as_user") && y.contains("\"/usr\"") && y.contains("\"/tmp\""), "{y}");
+    assert!(
+        y.contains("run_as_user") && y.contains("\"/usr\"") && y.contains("\"/tmp\""),
+        "{y}"
+    );
 }
 
 // ---- diff-logs ------------------------------------------------------------------------------------------------------
 
 fn logs_fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/logs").join(name)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/logs")
+        .join(name)
 }
 
 fn diff_json(t: &Path, log: &str) -> (i32, serde_json::Value) {
-    let o = run(t, &["diff-logs", logs_fixture(log).to_str().unwrap(), "--json"]);
-    (o.status.code().unwrap(), serde_json::from_str(&out(&o)).unwrap_or_else(|e| panic!("{e}: {} {}", out(&o), err(&o))))
+    let o = run(
+        t,
+        &["diff-logs", logs_fixture(log).to_str().unwrap(), "--json"],
+    );
+    (
+        o.status.code().unwrap(),
+        serde_json::from_str(&out(&o)).unwrap_or_else(|e| panic!("{e}: {} {}", out(&o), err(&o))),
+    )
 }
 
 fn kinds(v: &serde_json::Value) -> Vec<(String, String, String)> {
-    v["suggestions"].as_array().unwrap().iter().map(|s| (
-        s["kind"].as_str().unwrap().to_string(),
-        s["host"].as_str().unwrap().to_string(),
-        s["binary"].as_str().unwrap_or("").to_string(),
-    )).collect()
+    v["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| {
+            (
+                s["kind"].as_str().unwrap().to_string(),
+                s["host"].as_str().unwrap().to_string(),
+                s["binary"].as_str().unwrap_or("").to_string(),
+            )
+        })
+        .collect()
 }
 
 #[test]
@@ -529,20 +572,59 @@ fn diff_logs_shorthand_classifies_denies() {
     assert_eq!(v["events"], 7); // NET:REFUSE lines carry no binary and are skipped
     assert_eq!(v["denied"], 6);
     let k = kinds(&v);
-    assert!(k.contains(&("binary_mismatch".into(), "registry.npmjs.org".into(), "/usr/bin/curl".into())), "{k:?}");
-    assert!(k.contains(&("missing_egress".into(), "api.newvendor.io".into(), "/usr/bin/python3.12".into())), "{k:?}");
-    assert!(k.contains(&("l7_allow".into(), "huggingface.co".into(), "".into())), "{k:?}");
-    assert!(k.contains(&("manual".into(), "api.github.com".into(), "".into())), "{k:?}");
+    assert!(
+        k.contains(&(
+            "binary_mismatch".into(),
+            "registry.npmjs.org".into(),
+            "/usr/bin/curl".into()
+        )),
+        "{k:?}"
+    );
+    assert!(
+        k.contains(&(
+            "missing_egress".into(),
+            "api.newvendor.io".into(),
+            "/usr/bin/python3.12".into()
+        )),
+        "{k:?}"
+    );
+    assert!(
+        k.contains(&("l7_allow".into(), "huggingface.co".into(), "".into())),
+        "{k:?}"
+    );
+    assert!(
+        k.contains(&("manual".into(), "api.github.com".into(), "".into())),
+        "{k:?}"
+    );
     // the two curl denials are one suggestion with count 2
-    let m = v["suggestions"].as_array().unwrap().iter().find(|s| s["kind"] == "binary_mismatch").unwrap();
+    let m = v["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["kind"] == "binary_mismatch")
+        .unwrap();
     assert_eq!(m["count"], 2);
-    assert!(m["directive"].as_str().unwrap().contains("bin=/usr/bin/curl"));
-    assert!(m["directive"].as_str().unwrap().contains("access=read-only"));
+    assert!(m["directive"]
+        .as_str()
+        .unwrap()
+        .contains("bin=/usr/bin/curl"));
+    assert!(m["directive"]
+        .as_str()
+        .unwrap()
+        .contains("access=read-only"));
     // SSRF/metadata is never actionable
-    assert!(v["non_actionable"].as_array().unwrap().iter().any(|n| n["host"] == "169.254.169.254"));
+    assert!(v["non_actionable"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|n| n["host"] == "169.254.169.254"));
     assert!(!k.iter().any(|(_, h, _)| h == "169.254.169.254"));
     // openai never appears, so it is stale
-    assert!(v["stale"].as_array().unwrap().iter().any(|s| s["target"].as_str().unwrap().starts_with("api.openai.com")));
+    assert!(v["stale"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|s| s["target"].as_str().unwrap().starts_with("api.openai.com")));
 }
 
 #[test]
@@ -553,10 +635,29 @@ fn diff_logs_ocsf_json_matches_shorthand_semantics() {
     // class 3002 is ignored: 4 events
     assert_eq!(v["events"], 4);
     let k = kinds(&v);
-    assert!(k.contains(&("missing_egress".into(), "cdn.other.dev".into(), "/usr/local/bin/node".into())), "{k:?}");
-    assert!(k.contains(&("missing_egress".into(), "api.newvendor.io".into(), "/usr/bin/python3.12".into())));
-    let l7 = v["suggestions"].as_array().unwrap().iter().find(|s| s["kind"] == "l7_allow").unwrap();
-    assert!(l7["directive"].as_str().unwrap().contains("allow=\"POST:/api/upload\""));
+    assert!(
+        k.contains(&(
+            "missing_egress".into(),
+            "cdn.other.dev".into(),
+            "/usr/local/bin/node".into()
+        )),
+        "{k:?}"
+    );
+    assert!(k.contains(&(
+        "missing_egress".into(),
+        "api.newvendor.io".into(),
+        "/usr/bin/python3.12".into()
+    )));
+    let l7 = v["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["kind"] == "l7_allow")
+        .unwrap();
+    assert!(l7["directive"]
+        .as_str()
+        .unwrap()
+        .contains("allow=\"POST:/api/upload\""));
     assert!(l7["directive"].as_str().unwrap().contains("bin="));
 }
 
@@ -569,24 +670,37 @@ fn diff_logs_clean_when_everything_is_covered() {
     assert!(o.status.success(), "{}{}", out(&o), err(&o));
     // not-seen directives are reported as stale, and --deny-stale turns that into a failure
     assert!(out(&o).contains("STALE"));
-    let o = run(t.path(), &["diff-logs", log.to_str().unwrap(), "--deny-stale"]);
+    let o = run(
+        t.path(),
+        &["diff-logs", log.to_str().unwrap(), "--deny-stale"],
+    );
     assert_eq!(o.status.code(), Some(1));
 }
 
 #[test]
 fn diff_logs_write_places_directives_and_is_idempotent() {
     let t = fixture();
-    std::fs::write(t.path().join("src/extra.ts"), "export const u = 'https://api.newvendor.io/v1';\n").unwrap();
+    std::fs::write(
+        t.path().join("src/extra.ts"),
+        "export const u = 'https://api.newvendor.io/v1';\n",
+    )
+    .unwrap();
     let log = logs_fixture("ocsf.jsonl");
     let o = run(t.path(), &["diff-logs", log.to_str().unwrap(), "--write"]);
     assert_eq!(o.status.code(), Some(1), "{}", err(&o));
     // host mentioned in source: directive inserted above that line, with an explicit bin
     let extra = std::fs::read_to_string(t.path().join("src/extra.ts")).unwrap();
-    assert!(extra.starts_with("// @openshell egress api.newvendor.io:443"), "{extra}");
+    assert!(
+        extra.starts_with("// @openshell egress api.newvendor.io:443"),
+        "{extra}"
+    );
     assert!(extra.contains("bin=/usr/bin/python3.12"));
     // host that no source mentions: parked in the observed file
     let obs = std::fs::read_to_string(t.path().join("openshell/observed-egress.sh")).unwrap();
-    assert!(obs.contains("# @openshell egress cdn.other.dev:8443"), "{obs}");
+    assert!(
+        obs.contains("# @openshell egress cdn.other.dev:8443"),
+        "{obs}"
+    );
     // the L7 allow lands next to the directive it extends
     let hf = std::fs::read_to_string(t.path().join("src/cache.py")).unwrap();
     assert!(hf.contains("allow=\"POST:/api/upload\""), "{hf}");
@@ -595,7 +709,15 @@ fn diff_logs_write_places_directives_and_is_idempotent() {
     assert!(o.status.success(), "{}", err(&o));
     let o = run(t.path(), &["diff-logs", log.to_str().unwrap(), "--json"]);
     let v: serde_json::Value = serde_json::from_str(&out(&o)).unwrap();
-    assert!(v["suggestions"].as_array().unwrap().iter().all(|s| s["kind"] == "manual"), "{}", out(&o));
+    assert!(
+        v["suggestions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s["kind"] == "manual"),
+        "{}",
+        out(&o)
+    );
 }
 
 // ---- tree-sitter lint -----------------------------------------------------------------------------------------------
@@ -610,12 +732,27 @@ fn lint_ast_classifies_fs_write_paths_and_summarises_dynamic_ones() {
     )
     .unwrap();
     let s = out(&run(t.path(), &["lint"]));
-    assert!(!s.contains("src/w.ts:5") && !s.contains("src/w.ts:6") && !s.contains("src/w.ts:7"), "{s}");
-    assert!(s.contains("src/w.ts:8: warning[fs]") && s.contains("/var/lib/app/"), "{s}");
-    assert!(s.contains("src/w.ts:9: warning[fs]") && s.contains("/srv/app"), "{s}");
+    assert!(
+        !s.contains("src/w.ts:5") && !s.contains("src/w.ts:6") && !s.contains("src/w.ts:7"),
+        "{s}"
+    );
+    assert!(
+        s.contains("src/w.ts:8: warning[fs]") && s.contains("/var/lib/app/"),
+        "{s}"
+    );
+    assert!(
+        s.contains("src/w.ts:9: warning[fs]") && s.contains("/srv/app"),
+        "{s}"
+    );
     // the two dynamic writes are one repo-level info, not warnings
-    assert!(!s.contains("src/w.ts:10") && !s.contains("src/w.ts:11"), "{s}");
-    assert!(s.contains("info[fs]") && s.contains("2 filesystem write(s)"), "{s}");
+    assert!(
+        !s.contains("src/w.ts:10") && !s.contains("src/w.ts:11"),
+        "{s}"
+    );
+    assert!(
+        s.contains("info[fs]") && s.contains("2 filesystem write(s)"),
+        "{s}"
+    );
     let o = run(t.path(), &["lint", "--json"]);
     assert!(out(&o).contains("\"file\": \".\""), "{}", out(&o));
 }
@@ -630,18 +767,31 @@ fn lint_ast_without_any_fs_root_warns_once_per_file() {
     for e in walk(t.path()) {
         if let Ok(txt) = std::fs::read_to_string(&e) {
             if txt.contains("@openshell fs write") {
-                let kept: Vec<&str> = txt.lines().filter(|l| !l.contains("@openshell fs write")).collect();
+                let kept: Vec<&str> = txt
+                    .lines()
+                    .filter(|l| !l.contains("@openshell fs write"))
+                    .collect();
                 std::fs::write(&e, kept.join("\n") + "\n").unwrap();
                 stripped = true;
             }
         }
     }
     assert!(stripped);
-    std::fs::write(t.path().join("src/w.py"), "def f(p, q):\n    open(p, \"w\")\n    open(q, \"wb\")\n    open(p)\n").unwrap();
+    std::fs::write(
+        t.path().join("src/w.py"),
+        "def f(p, q):\n    open(p, \"w\")\n    open(q, \"wb\")\n    open(p)\n",
+    )
+    .unwrap();
     let s = out(&run(t.path(), &["lint"]));
-    let n = s.lines().filter(|l| l.starts_with("src/w.py") && l.contains("warning[fs]")).count();
+    let n = s
+        .lines()
+        .filter(|l| l.starts_with("src/w.py") && l.contains("warning[fs]"))
+        .count();
     assert_eq!(n, 1, "{s}");
-    assert!(s.contains("2 filesystem write(s) with non-literal paths"), "{s}");
+    assert!(
+        s.contains("2 filesystem write(s) with non-literal paths"),
+        "{s}"
+    );
 }
 
 fn walk(d: &Path) -> Vec<PathBuf> {
@@ -668,15 +818,33 @@ fn lint_ast_resolves_urls_against_declared_egress_and_reads_python_go_shell_synt
     .unwrap();
     let s = out(&run(t.path(), &["lint"]));
     assert!(!s.contains("src/u.py:2"), "{s}");
-    assert!(s.contains("src/u.py:3: warning[net]") && s.contains("api.acme-z.dev:443"), "{s}");
-    assert!(s.contains("src/u.py:4: info[net]: URL literal to cdn.acme-y.dev:443"), "{s}");
-    assert!(s.contains("src/u.py:5: warning[env]") && s.contains("MY_API_KEY"), "{s}");
-    assert!(!s.contains("src/u.py:6") && !s.contains("src/u.py:7") && !s.contains("src/u.py:8"), "{s}");
+    assert!(
+        s.contains("src/u.py:3: warning[net]") && s.contains("api.acme-z.dev:443"),
+        "{s}"
+    );
+    assert!(
+        s.contains("src/u.py:4: info[net]: URL literal to cdn.acme-y.dev:443"),
+        "{s}"
+    );
+    assert!(
+        s.contains("src/u.py:5: warning[env]") && s.contains("MY_API_KEY"),
+        "{s}"
+    );
+    assert!(
+        !s.contains("src/u.py:6") && !s.contains("src/u.py:7") && !s.contains("src/u.py:8"),
+        "{s}"
+    );
     // shell: expansions and redirections come from the AST
     std::fs::write(t.path().join("scripts/y.sh"), "echo \"$MY_SECRET_TOKEN\" > \"$TMPDIR/x\"\nwget -q https://dl.acme-q.dev/a.tgz -O /srv/a.tgz\nls 2>&1 >&2\n").unwrap();
     let s = out(&run(t.path(), &["lint"]));
-    assert!(s.contains("scripts/y.sh:1: warning[env]") && s.contains("MY_SECRET_TOKEN"), "{s}");
-    assert!(!s.contains("scripts/y.sh:1: warning[fs]"), "TMPDIR target is a temp path: {s}");
+    assert!(
+        s.contains("scripts/y.sh:1: warning[env]") && s.contains("MY_SECRET_TOKEN"),
+        "{s}"
+    );
+    assert!(
+        !s.contains("scripts/y.sh:1: warning[fs]"),
+        "TMPDIR target is a temp path: {s}"
+    );
     assert!(s.contains("scripts/y.sh:2: warning[net]: curl/wget"), "{s}");
     assert!(!s.contains("scripts/y.sh:3"), "{s}");
 }
@@ -685,8 +853,16 @@ fn lint_ast_resolves_urls_against_declared_egress_and_reads_python_go_shell_synt
 fn lint_regex_engine_is_still_available() {
     let t = fixture();
     let toml = std::fs::read_to_string(t.path().join("openshell-annotate.toml")).unwrap();
-    std::fs::write(t.path().join("openshell-annotate.toml"), format!("{toml}\n[lint]\nengine = \"regex\"\n")).unwrap();
-    std::fs::write(t.path().join("src/r.ts"), "export const a = fetch(\"https://api.acme-r.dev/x\");\n").unwrap();
+    std::fs::write(
+        t.path().join("openshell-annotate.toml"),
+        format!("{toml}\n[lint]\nengine = \"regex\"\n"),
+    )
+    .unwrap();
+    std::fs::write(
+        t.path().join("src/r.ts"),
+        "export const a = fetch(\"https://api.acme-r.dev/x\");\n",
+    )
+    .unwrap();
     let s = out(&run(t.path(), &["lint"]));
     assert!(s.contains("src/r.ts:1: warning[net]: fetch()"), "{s}");
 }
@@ -699,26 +875,49 @@ fn lint_ast_follows_fs_imports_and_aliases() {
         "import { mkdir as mk, readFile } from \"node:fs/promises\";\nconst { rename } = require(\"fs\");\nexport async function f() {\n  await mk(\"/srv/a\");\n  await readFile(\"/srv/b\");\n  rename(\"/srv/c\", \"/srv/d\");\n  const mkdir = () => 1;\n  mkdir();\n}\n",
     )
     .unwrap();
-    std::fs::write(t.path().join("src/noimp.ts"), "function mkdir(p: string) {}\nmkdir(\"/srv/z\");\n").unwrap();
+    std::fs::write(
+        t.path().join("src/noimp.ts"),
+        "function mkdir(p: string) {}\nmkdir(\"/srv/z\");\n",
+    )
+    .unwrap();
     let s = out(&run(t.path(), &["lint"]));
-    assert!(s.contains("src/imp.ts:4: warning[fs]") && s.contains("(mkdir) to /srv/a"), "{s}");
+    assert!(
+        s.contains("src/imp.ts:4: warning[fs]") && s.contains("(mkdir) to /srv/a"),
+        "{s}"
+    );
     assert!(!s.contains("src/imp.ts:5"), "{s}");
-    assert!(s.contains("src/imp.ts:6: warning[fs]") && s.contains("to /srv/d"), "{s}");
-    assert!(!s.contains("src/noimp.ts"), "a local function named mkdir is not fs.mkdir: {s}");
+    assert!(
+        s.contains("src/imp.ts:6: warning[fs]") && s.contains("to /srv/d"),
+        "{s}"
+    );
+    assert!(
+        !s.contains("src/noimp.ts"),
+        "a local function named mkdir is not fs.mkdir: {s}"
+    );
 }
 
 #[test]
 fn profiles_dirs_lists_several_directories_and_profiles_dir_still_works() {
     let t = fixture();
-    let base = out(&run(t.path(), &["generate", "--providers-out", "p.json", "-o", "policy.yaml"]));
+    let base = out(&run(
+        t.path(),
+        &["generate", "--providers-out", "p.json", "-o", "policy.yaml"],
+    ));
     let want = std::fs::read_to_string(t.path().join("p.json")).unwrap();
     let _ = base;
     // move the profiles to two other directories and list both
     std::fs::create_dir_all(t.path().join("profiles_a")).unwrap();
     std::fs::create_dir_all(t.path().join("profiles_b")).unwrap();
-    for (i, e) in std::fs::read_dir(t.path().join("profiles")).unwrap().enumerate() {
+    for (i, e) in std::fs::read_dir(t.path().join("profiles"))
+        .unwrap()
+        .enumerate()
+    {
         let e = e.unwrap();
-        let dir = if i % 2 == 0 { "profiles_a" } else { "profiles_b" };
+        let dir = if i % 2 == 0 {
+            "profiles_a"
+        } else {
+            "profiles_b"
+        };
         std::fs::create_dir_all(t.path().join(dir)).unwrap();
         std::fs::rename(e.path(), t.path().join(dir).join(e.file_name())).unwrap();
     }
@@ -726,12 +925,27 @@ fn profiles_dirs_lists_several_directories_and_profiles_dir_still_works() {
     let toml = std::fs::read_to_string(t.path().join("openshell-annotate.toml")).unwrap();
     std::fs::write(
         t.path().join("openshell-annotate.toml"),
-        toml.replace("profiles_dir = \"profiles\"", "profiles_dirs = [\"profiles_a\", \"profiles_b\"]"),
+        toml.replace(
+            "profiles_dir = \"profiles\"",
+            "profiles_dirs = [\"profiles_a\", \"profiles_b\"]",
+        ),
     )
     .unwrap();
-    let o = run(t.path(), &["generate", "--providers-out", "p2.json", "-o", "policy2.yaml"]);
+    let o = run(
+        t.path(),
+        &[
+            "generate",
+            "--providers-out",
+            "p2.json",
+            "-o",
+            "policy2.yaml",
+        ],
+    );
     assert!(o.status.success(), "{}", err(&o));
-    assert_eq!(std::fs::read_to_string(t.path().join("p2.json")).unwrap(), want);
+    assert_eq!(
+        std::fs::read_to_string(t.path().join("p2.json")).unwrap(),
+        want
+    );
 }
 
 #[test]
@@ -748,11 +962,23 @@ fn diff_logs_ignore_host_declines_a_denial_on_purpose() {
     assert!(!k.iter().any(|(_, h, _)| h == "api.newvendor.io"), "{k:?}");
     let d = &v["declined"].as_array().unwrap()[0];
     assert_eq!(d["host"], "api.newvendor.io");
-    assert!(d["reason"].as_str().unwrap().contains("deliberately blocked"));
+    assert!(d["reason"]
+        .as_str()
+        .unwrap()
+        .contains("deliberately blocked"));
     // host= is only valid with kind=net
-    std::fs::write(t.path().join("src/bad.ts"), "// @openshell ignore host=x.example.com reason=\"r\"\n").unwrap();
+    std::fs::write(
+        t.path().join("src/bad.ts"),
+        "// @openshell ignore host=x.example.com reason=\"r\"\n",
+    )
+    .unwrap();
     let o = run(t.path(), &["lint"]);
-    assert!(out(&o).contains("ignore host=... needs kind=net"), "{}{}", out(&o), err(&o));
+    assert!(
+        out(&o).contains("ignore host=... needs kind=net"),
+        "{}{}",
+        out(&o),
+        err(&o)
+    );
 }
 
 #[test]
@@ -765,5 +991,10 @@ fn js_directives_survive_regex_literals_that_confuse_a_lexer() {
     )
     .unwrap();
     let o = run(t.path(), &["scan"]);
-    assert!(out(&o).contains("src/rx.ts:3  egress"), "{}{}", out(&o), err(&o));
+    assert!(
+        out(&o).contains("src/rx.ts:3  egress"),
+        "{}{}",
+        out(&o),
+        err(&o)
+    );
 }

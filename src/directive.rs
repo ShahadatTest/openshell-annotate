@@ -224,7 +224,12 @@ fn tokenize(s: &str) -> Result<Vec<Tok>, String> {
 fn allowed_attrs(verb: &str) -> (Vec<&'static str>, Vec<&'static str>) {
     match spec::verb(verb) {
         Some(v) => (
-            v.attrs.iter().filter(|a| !a.multi).map(|a| a.name).chain(spec::COMMON_ATTRS.iter().map(|a| a.name)).collect(),
+            v.attrs
+                .iter()
+                .filter(|a| !a.multi)
+                .map(|a| a.name)
+                .chain(spec::COMMON_ATTRS.iter().map(|a| a.name))
+                .collect(),
             v.attrs.iter().filter(|a| a.multi).map(|a| a.name).collect(),
         ),
         None => (vec![], vec![]),
@@ -236,8 +241,18 @@ fn parse_body(body: &str) -> Result<(Kind, Attrs), String> {
     let mut it = toks.into_iter();
     let verb = match it.next() {
         Some(Tok::Word(w)) => w,
-        Some(Tok::Pair(k, _)) => return Err(format!("expected a directive keyword ({}), found attribute `{k}=`", spec::verb_names())),
-        None => return Err(format!("empty directive; expected one of: {}", spec::verb_names())),
+        Some(Tok::Pair(k, _)) => {
+            return Err(format!(
+                "expected a directive keyword ({}), found attribute `{k}=`",
+                spec::verb_names()
+            ))
+        }
+        None => {
+            return Err(format!(
+                "empty directive; expected one of: {}",
+                spec::verb_names()
+            ))
+        }
     };
     let mut words = Vec::new();
     let mut attrs = Attrs {

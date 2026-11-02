@@ -154,13 +154,19 @@ pub fn directives_md() -> String {
     s.push_str(GRAMMAR);
     s.push_str("\n```\n\n");
     s.push_str("Values containing spaces must be quoted: `reason=\"LLM calls\"`. Absolute paths may contain `=`.\n\n");
-    s.push_str("## Directives\n\n| Directive | Summary | `reason` | Lint category |\n|---|---|---|---|\n");
+    s.push_str(
+        "## Directives\n\n| Directive | Summary | `reason` | Lint category |\n|---|---|---|---|\n",
+    );
     for v in VERBS {
         s.push_str(&format!(
             "| [`{0}`](#{0}) | {1} | {2} | {3} |\n",
             v.verb,
             v.summary,
-            if v.reason_required { "required" } else { "optional" },
+            if v.reason_required {
+                "required"
+            } else {
+                "optional"
+            },
             v.covers
         ));
     }
@@ -183,7 +189,11 @@ pub fn directives_md() -> String {
         }
         s.push_str(&format!(
             "`reason` is {}.\n\n**Becomes:** {}\n",
-            if v.reason_required { "required" } else { "optional" },
+            if v.reason_required {
+                "required"
+            } else {
+                "optional"
+            },
             v.emits
         ));
     }

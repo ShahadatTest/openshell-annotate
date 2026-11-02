@@ -6,10 +6,10 @@
 //! SDK-hidden HTTP calls need a directive or `@openshell ignore`. A tree-sitter backend is the planned
 //! upgrade (see docs/design.md).
 
+use crate::ast::{self, Pth, Site};
 use crate::config::Config;
 use crate::directive::{Directive, Kind};
 use crate::lexer::Language;
-use crate::ast::{self, Pth, Site};
 use crate::scan::{Scan, Source};
 use crate::validate;
 use regex::Regex;
@@ -209,7 +209,11 @@ pub(crate) fn url_hosts(raw: &str) -> Vec<String> {
 fn excluded(rel: &str, cfg: &Config) -> bool {
     let path = format!("/{rel}");
     DEFAULT_EXCLUDES.iter().any(|x| path.contains(x))
-        || cfg.lint.exclude.iter().any(|x| crate::config::path_matches(rel, x))
+        || cfg
+            .lint
+            .exclude
+            .iter()
+            .any(|x| crate::config::path_matches(rel, x))
 }
 
 pub fn lint(scan: &Scan, cfg: &Config) -> Vec<Finding> {
@@ -279,7 +283,19 @@ pub fn lint(scan: &Scan, cfg: &Config) -> Vec<Finding> {
         };
         if cfg.lint.engine != "regex" {
             if let Some(sites) = ast::sites(src.lang, &src.rel, &src.lexed.raw.join("\n")) {
-                lint_sites(src, sites, cfg, &Ctx { provider_envs: &provider_envs, fs_roots: &fs_roots, egress: &egress }, &covered, &mut out, &mut dyn_fs);
+                lint_sites(
+                    src,
+                    sites,
+                    cfg,
+                    &Ctx {
+                        provider_envs: &provider_envs,
+                        fs_roots: &fs_roots,
+                        egress: &egress,
+                    },
+                    &covered,
+                    &mut out,
+                    &mut dyn_fs,
+                );
                 continue;
             }
         }
@@ -380,7 +396,11 @@ pub fn lint(scan: &Scan, cfg: &Config) -> Vec<Finding> {
     if cfg.lint.fs_dynamic == "summary" && !dyn_fs.is_empty() && !fs_roots.is_empty() {
         let total: usize = dyn_fs.iter().map(|d| d.1.len()).sum();
         dyn_fs.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then(a.0.cmp(&b.0)));
-        let top: Vec<String> = dyn_fs.iter().take(5).map(|(f, l)| format!("{f} ({})", l.len())).collect();
+        let top: Vec<String> = dyn_fs
+            .iter()
+            .take(5)
+            .map(|(f, l)| format!("{f} ({})", l.len()))
+            .collect();
         out.push(Finding {
             file: ".".into(),
             line: 0,
@@ -405,7 +425,9 @@ struct Ctx<'a> {
 }
 
 fn host_known(ctx: &Ctx, hp: &str) -> bool {
-    let Some((h, p)) = hp.rsplit_once(':') else { return false };
+    let Some((h, p)) = hp.rsplit_once(':') else {
+        return false;
+    };
     let p: u16 = p.parse().unwrap_or(443);
     ctx.egress
         .iter()
@@ -418,7 +440,10 @@ fn placeholder_host(hp: &str) -> bool {
         || h.ends_with(".test")
         || h.ends_with(".local")
         || h.ends_with(".internal")
-        || matches!(h, "www.w3.org" | "w3.org" | "json-schema.org" | "schemas.xmlsoap.org" | "xmlns.com")
+        || matches!(
+            h,
+            "www.w3.org" | "w3.org" | "json-schema.org" | "schemas.xmlsoap.org" | "xmlns.com"
+        )
 }
 
 /// AST-site lint for one source file.
@@ -432,12 +457,19 @@ fn lint_sites(
     dyn_fs: &mut Vec<(String, Vec<usize>)>,
 ) {
     sites.sort_by_key(|s| s.line);
-    let want = |c: &str| cfg.lint.categories.is_empty() || cfg.lint.categories.iter().any(|x| x == c);
+    let want =
+        |c: &str| cfg.lint.categories.is_empty() || cfg.lint.categories.iter().any(|x| x == c);
     let mut net_lines: BTreeSet<usize> = BTreeSet::new();
     let mut seen_env: BTreeSet<(usize, String)> = BTreeSet::new();
     let mut file_dyn: Vec<usize> = Vec::new();
     let mut push = |line: usize, severity: Severity, category: &'static str, message: String| {
-        out.push(Finding { file: src.rel.clone(), line, severity, category, message });
+        out.push(Finding {
+            file: src.rel.clone(),
+            line,
+            severity,
+            category,
+            message,
+        });
     };
     // calls first so that a URL literal on the same line as a flagged call is not reported twice
     sites.sort_by_key(|s| (s.line, !s.call));
@@ -448,7 +480,11 @@ fn lint_sites(
         match s.cat {
             "env" => {
                 let Some(n) = &s.env else { continue };
-                if !secret_like(n) || ctx.provider_envs.contains(n.as_str()) || covered(s.line, "env") || !seen_env.insert((s.line, n.clone())) {
+                if !secret_like(n)
+                    || ctx.provider_envs.contains(n.as_str())
+                    || covered(s.line, "env")
+                    || !seen_env.insert((s.line, n.clone()))
+                {
                     continue;
                 }
                 push(s.line, Severity::Warning, "env", format!("reads secret-like variable {n} with no `@openshell provider {n}`; if a provider supplies it, declare it; otherwise `@openshell ignore kind=env reason=\"...\"`"));
@@ -462,7 +498,11 @@ fn lint_sites(
                 if covered(s.line, "net") {
                     continue;
                 }
-                let unknown: Vec<&String> = s.urls.iter().filter(|u| !host_known(ctx, u) && (s.call || !placeholder_host(u))).collect();
+                let unknown: Vec<&String> = s
+                    .urls
+                    .iter()
+                    .filter(|u| !host_known(ctx, u) && (s.call || !placeholder_host(u)))
+                    .collect();
                 if s.call {
                     if !s.urls.is_empty() && unknown.is_empty() {
                         net_lines.insert(s.line);
@@ -471,10 +511,22 @@ fn lint_sites(
                     let hint = if unknown.is_empty() {
                         " (no literal URL in the arguments: declare the host with @openshell egress, or @openshell ignore kind=net)".to_string()
                     } else {
-                        format!(" (suggest: @openshell egress {} reason=\"...\")", unknown.iter().map(|x| x.as_str()).collect::<Vec<_>>().join(", "))
+                        format!(
+                            " (suggest: @openshell egress {} reason=\"...\")",
+                            unknown
+                                .iter()
+                                .map(|x| x.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
                     };
                     net_lines.insert(s.line);
-                    push(s.line, Severity::Warning, "net", format!("{} without an @openshell directive{hint}", s.what));
+                    push(
+                        s.line,
+                        Severity::Warning,
+                        "net",
+                        format!("{} without an @openshell directive{hint}", s.what),
+                    );
                 } else if !unknown.is_empty() && !net_lines.contains(&s.line) {
                     net_lines.insert(s.line);
                     push(s.line, Severity::Info, "net", format!("URL literal to {} has no matching @openshell egress (suggest: @openshell egress {} reason=\"...\")", unknown[0], unknown.iter().map(|x| x.as_str()).collect::<Vec<_>>().join(", ")));
@@ -513,7 +565,12 @@ mod secret_name_tests {
 
     #[test]
     fn secret_names() {
-        for n in ["OPENAI_API_KEY", "GITHUB_TOKEN", "BETTER_AUTH_SECRET", "DB_PASSWORD"] {
+        for n in [
+            "OPENAI_API_KEY",
+            "GITHUB_TOKEN",
+            "BETTER_AUTH_SECRET",
+            "DB_PASSWORD",
+        ] {
             assert!(secret_like(n), "{n}");
         }
         for n in [

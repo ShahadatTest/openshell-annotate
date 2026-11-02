@@ -85,7 +85,9 @@ fn parse_json_line(v: &serde_json::Value, source: &str, line: usize) -> Option<E
     };
     let dst = v.get("dst_endpoint");
     let s = |o: Option<&serde_json::Value>, k: &str| {
-        o.and_then(|x| x.get(k)).and_then(|x| x.as_str()).map(str::to_string)
+        o.and_then(|x| x.get(k))
+            .and_then(|x| x.as_str())
+            .map(str::to_string)
     };
     let http = v.get("http_request");
     let url = http.and_then(|h| h.get("url"));
@@ -115,7 +117,10 @@ fn parse_json_line(v: &serde_json::Value, source: &str, line: usize) -> Option<E
         method: s(http, "http_method"),
         path: s(url, "path").map(|p| strip_query(&p)),
         policy: s(v.get("firewall_rule"), "name"),
-        reason: v.get("status_detail").and_then(|x| x.as_str()).map(str::to_string),
+        reason: v
+            .get("status_detail")
+            .and_then(|x| x.as_str())
+            .map(str::to_string),
         source: source.to_string(),
         line,
     })
@@ -145,7 +150,10 @@ pub fn parse_logs(text: &str, source: &str) -> Vec<Event> {
                 port: c[5].parse().ok(),
                 method: None,
                 path: None,
-                policy: c.get(6).map(|m| m.as_str().to_string()).filter(|p| p != "-"),
+                policy: c
+                    .get(6)
+                    .map(|m| m.as_str().to_string())
+                    .filter(|p| p != "-"),
                 reason: c.get(8).map(|m| m.as_str().to_string()),
                 source: source.to_string(),
                 line: i + 1,
@@ -163,7 +171,10 @@ pub fn parse_logs(text: &str, source: &str) -> Vec<Event> {
                 port,
                 method: Some(c[3].to_string()),
                 path: Some(strip_query(c.get(7).map(|m| m.as_str()).unwrap_or("/"))),
-                policy: c.get(8).map(|m| m.as_str().to_string()).filter(|p| p != "-"),
+                policy: c
+                    .get(8)
+                    .map(|m| m.as_str().to_string())
+                    .filter(|p| p != "-"),
                 reason: c.get(10).map(|m| m.as_str().to_string()),
                 source: source.to_string(),
                 line: i + 1,
@@ -232,7 +243,7 @@ fn row_rule_name(r: &Row) -> String {
 }
 
 fn row_matches_target(r: &Row, host: &str, port: Option<u16>) -> bool {
-    host_matches(&r.host, host) && port.map_or(true, |p| r.ports.contains(&p))
+    host_matches(&r.host, host) && port.is_none_or(|p| r.ports.contains(&p))
 }
 
 fn non_actionable(e: &Event) -> Option<&'static str> {
@@ -307,7 +318,9 @@ pub struct Report {
 
 /// `GET:/v1/**` style rule vs. a method and path (`**` spans segments, `*` one segment).
 fn allow_covers(rule: &str, method: &str, path: &str) -> bool {
-    let Some((m, glob)) = rule.split_once(':') else { return false };
+    let Some((m, glob)) = rule.split_once(':') else {
+        return false;
+    };
     if m != "*" && !m.eq_ignore_ascii_case(method) {
         return false;
     }
@@ -324,7 +337,7 @@ fn allow_covers(rule: &str, method: &str, path: &str) -> bool {
         }
     }
     re.push('$');
-    Regex::new(&re).map_or(false, |r| r.is_match(path))
+    Regex::new(&re).is_ok_and(|r| r.is_match(path))
 }
 
 fn spec_attrs(d: &Directive) -> String {
@@ -345,7 +358,9 @@ fn spec_attrs(d: &Directive) -> String {
 fn find_mention(scan: &Scan, host: &str) -> Option<String> {
     let mut best: Option<String> = None;
     for src in &scan.sources {
-        let test_like = src.rel.contains("test") || src.rel.contains("fixture") || src.rel.contains("/scripts/");
+        let test_like = src.rel.contains("test")
+            || src.rel.contains("fixture")
+            || src.rel.contains("/scripts/");
         for (i, raw) in src.lexed.raw.iter().enumerate() {
             if raw.contains(host) && !raw.contains("@openshell") {
                 let loc = format!("{}:{}", src.rel, i + 1);
@@ -364,7 +379,10 @@ pub fn analyze(events: &[Event], scan: &Scan, cfg: &Config) -> Report {
     let mut rep = Report {
         events: events.len(),
         denied: events.iter().filter(|e| e.action == Action::Denied).count(),
-        allowed: events.iter().filter(|e| e.action == Action::Allowed).count(),
+        allowed: events
+            .iter()
+            .filter(|e| e.action == Action::Allowed)
+            .count(),
         ..Default::default()
     };
 
@@ -388,7 +406,8 @@ pub fn analyze(events: &[Event], scan: &Scan, cfg: &Config) -> Report {
             continue;
         }
         if let Some(why) = non_actionable(e) {
-            *na.entry((e.host.clone(), e.port, why.to_string())).or_default() += 1;
+            *na.entry((e.host.clone(), e.port, why.to_string()))
+                .or_default() += 1;
             continue;
         }
         let g = groups
@@ -403,10 +422,21 @@ pub fn analyze(events: &[Event], scan: &Scan, cfg: &Config) -> Report {
         }
     }
     for ((host, port, directive), (count, reason)) in declined {
-        rep.declined.push(Declined { host, port, count, directive, reason });
+        rep.declined.push(Declined {
+            host,
+            port,
+            count,
+            directive,
+            reason,
+        });
     }
     for ((host, port, why), count) in na {
-        rep.non_actionable.push(NonActionable { host, port, count, why });
+        rep.non_actionable.push(NonActionable {
+            host,
+            port,
+            count,
+            why,
+        });
     }
 
     let mut seen_directives: BTreeSet<String> = BTreeSet::new();
@@ -418,7 +448,10 @@ pub fn analyze(events: &[Event], scan: &Scan, cfg: &Config) -> Report {
         let target = format!("{host}:{}", port.map_or("?".into(), |p| p.to_string()));
         let place = find_mention(scan, host);
         let by = bin.clone().unwrap_or_else(|| "unknown binary".into());
-        let bin_attr = bin.as_ref().map(|b| format!(" bin={b}")).unwrap_or_default();
+        let bin_attr = bin
+            .as_ref()
+            .map(|b| format!(" bin={b}"))
+            .unwrap_or_default();
         if matching.is_empty() {
             if port.is_none() {
                 rep.suggestions.push(Suggestion { kind: "manual", host: host.clone(), port: *port, binary: bin.clone(), count: *count, directive: None, place, note: "denied connection without a port; add an egress directive with the right host:port".into() });
@@ -433,11 +466,28 @@ pub fn analyze(events: &[Event], scan: &Scan, cfg: &Config) -> Report {
                 }
             }
             if seen_directives.insert(d.clone()) {
-                rep.suggestions.push(Suggestion { kind: "missing_egress", host: host.clone(), port: *port, binary: bin.clone(), count: *count, directive: Some(d), place, note: if bin.is_none() { "no binary in the event: add bin= or rely on [languages]".into() } else { "no directive covers this host:port".into() } });
+                rep.suggestions.push(Suggestion {
+                    kind: "missing_egress",
+                    host: host.clone(),
+                    port: *port,
+                    binary: bin.clone(),
+                    count: *count,
+                    directive: Some(d),
+                    place,
+                    note: if bin.is_none() {
+                        "no binary in the event: add bin= or rely on [languages]".into()
+                    } else {
+                        "no directive covers this host:port".into()
+                    },
+                });
             }
             continue;
         }
-        let bin_ok = bin.as_ref().map_or(true, |b| matching.iter().any(|r| r.bin.as_deref().map_or(false, |rb| bin_matches(rb, b))));
+        let bin_ok = bin.as_ref().is_none_or(|b| {
+            matching
+                .iter()
+                .any(|r| r.bin.as_deref().is_some_and(|rb| bin_matches(rb, b)))
+        });
         if !bin_ok {
             let r = matching[0];
             let d = format!(
@@ -445,31 +495,76 @@ pub fn analyze(events: &[Event], scan: &Scan, cfg: &Config) -> Report {
                 spec_attrs(&r.dir)
             );
             if seen_directives.insert(d.clone()) {
-                rep.suggestions.push(Suggestion { kind: "binary_mismatch", host: host.clone(), port: *port, binary: bin.clone(), count: *count, directive: Some(d), place: Some(r.dir.loc()), note: format!("host:port is annotated at {} but for {}; this binary is not in the rule", r.dir.loc(), r.bin.clone().unwrap_or_else(|| "?".into())) });
+                rep.suggestions.push(Suggestion {
+                    kind: "binary_mismatch",
+                    host: host.clone(),
+                    port: *port,
+                    binary: bin.clone(),
+                    count: *count,
+                    directive: Some(d),
+                    place: Some(r.dir.loc()),
+                    note: format!(
+                        "host:port is annotated at {} but for {}; this binary is not in the rule",
+                        r.dir.loc(),
+                        r.bin.clone().unwrap_or_else(|| "?".into())
+                    ),
+                });
             }
             continue;
         }
         // host:port and binary are covered: remaining denials are L7 (method/path not permitted).
         for (m, p) in l7 {
-            let r = matching.iter().find(|r| bin.is_none() || r.bin.as_deref().zip(bin.as_deref()).map_or(false, |(a, b)| bin_matches(a, b))).unwrap_or(&matching[0]);
+            let r = matching
+                .iter()
+                .find(|r| {
+                    bin.is_none()
+                        || r.bin
+                            .as_deref()
+                            .zip(bin.as_deref())
+                            .is_some_and(|(a, b)| bin_matches(a, b))
+                })
+                .unwrap_or(&matching[0]);
             if r.dir.attr("access").is_some() {
                 rep.suggestions.push(Suggestion { kind: "manual", host: host.clone(), port: *port, binary: bin.clone(), count: *count, directive: None, place: Some(r.dir.loc()), note: format!("{m} {p} denied under access={}; raise access or switch {} to allow=\"...\" rules", r.dir.attr("access").unwrap(), r.dir.loc()) });
                 continue;
             }
             let covered = matching.iter().any(|r| {
-                r.dir.attrs.multi.get("allow").into_iter().flatten().any(|a| allow_covers(a, m, p))
+                r.dir
+                    .attrs
+                    .multi
+                    .get("allow")
+                    .into_iter()
+                    .flatten()
+                    .any(|a| allow_covers(a, m, p))
             });
             if covered {
                 rep.suggestions.push(Suggestion { kind: "manual", host: host.clone(), port: *port, binary: bin.clone(), count: *count, directive: None, place: Some(r.dir.loc()), note: format!("{m} {p} is already allowed by the directives, yet was denied: the deployed policy is stale (regenerate and apply it)") });
                 continue;
             }
-            let rb = r.bin.clone().map(|b| format!(" bin={b}")).unwrap_or_default();
-            let rule = r.dir.attr("rule").map(|x| format!(" rule={x}")).unwrap_or_default();
+            let rb = r
+                .bin
+                .clone()
+                .map(|b| format!(" bin={b}"))
+                .unwrap_or_default();
+            let rule = r
+                .dir
+                .attr("rule")
+                .map(|x| format!(" rule={x}"))
+                .unwrap_or_default();
             let d = format!(
                 "@openshell egress {target} reason=\"observed L7 deny: {m} {p} (confirm it is needed)\" allow=\"{m}:{p}\"{rb}{rule}"
             );
             if seen_directives.insert(d.clone()) {
-                rep.suggestions.push(Suggestion { kind: "l7_allow", host: host.clone(), port: *port, binary: bin.clone(), count: *count, directive: Some(d), place: Some(r.dir.loc()), note: format!("method/path not permitted by the rules at {}", r.dir.loc()) });
+                rep.suggestions.push(Suggestion {
+                    kind: "l7_allow",
+                    host: host.clone(),
+                    port: *port,
+                    binary: bin.clone(),
+                    count: *count,
+                    directive: Some(d),
+                    place: Some(r.dir.loc()),
+                    note: format!("method/path not permitted by the rules at {}", r.dir.loc()),
+                });
             }
         }
         if l7.is_empty() {
@@ -493,7 +588,11 @@ pub fn analyze(events: &[Event], scan: &Scan, cfg: &Config) -> Report {
                     target: format!(
                         "{}:{}",
                         r.host,
-                        r.ports.iter().map(u16::to_string).collect::<Vec<_>>().join(",")
+                        r.ports
+                            .iter()
+                            .map(u16::to_string)
+                            .collect::<Vec<_>>()
+                            .join(",")
                     ),
                     binary: r.bin.clone(),
                 });
@@ -527,7 +626,10 @@ pub fn write_suggestions(
             if let Some(p) = &s.place {
                 if let Some((f, l)) = p.rsplit_once(':') {
                     if let Ok(l) = l.parse::<usize>() {
-                        by_file.entry(f.to_string()).or_default().push((l, d.clone()));
+                        by_file
+                            .entry(f.to_string())
+                            .or_default()
+                            .push((l, d.clone()));
                         continue;
                     }
                 }
@@ -537,7 +639,10 @@ pub fn write_suggestions(
             if let Some(p) = &s.place {
                 if let Some((f, l)) = p.rsplit_once(':') {
                     if let Ok(l) = l.parse::<usize>() {
-                        by_file.entry(f.to_string()).or_default().push((l, d.clone()));
+                        by_file
+                            .entry(f.to_string())
+                            .or_default()
+                            .push((l, d.clone()));
                         continue;
                     }
                 }
@@ -589,7 +694,8 @@ pub fn write_suggestions(
 }
 
 pub fn render_text(rep: &Report) -> String {
-    let mut s = format!(
+    let mut s =
+        format!(
         "diff-logs: {} event(s) ({} denied, {} allowed); {} suggestion(s), {} stale directive(s)\n",
         rep.events, rep.denied, rep.allowed, rep.suggestions.len(), rep.stale.len()
     );
@@ -650,9 +756,15 @@ mod tests {
 garbage line\n";
         let e = parse_logs(t, "x");
         assert_eq!(e.len(), 2);
-        assert_eq!((e[0].binary.as_deref(), e[0].host.as_str(), e[0].port), (Some("/usr/bin/curl"), "a.example", Some(8443)));
+        assert_eq!(
+            (e[0].binary.as_deref(), e[0].host.as_str(), e[0].port),
+            (Some("/usr/bin/curl"), "a.example", Some(8443))
+        );
         assert_eq!(e[0].policy, None);
-        assert_eq!((e[1].port, e[1].path.as_deref(), e[1].binary.clone()), (Some(80), Some("/x"), None));
+        assert_eq!(
+            (e[1].port, e[1].path.as_deref(), e[1].binary.clone()),
+            (Some(80), Some("/x"), None)
+        );
     }
 
     #[test]
@@ -660,14 +772,26 @@ garbage line\n";
         let t = "{\"class_uid\":4001,\"action_id\":2,\"dst_endpoint\":{\"ip\":\"1.2.3.4\",\"port\":22},\"actor\":{\"process\":{\"file\":{\"path\":\"/usr/bin/git\"}}}}\n{\"class_uid\":1007}\nOCSF-JSON {\"class_uid\":4002,\"action\":\"Allowed\",\"http_request\":{\"http_method\":\"GET\",\"url\":{\"hostname\":\"h.example\",\"path\":\"/p\"}},\"dst_endpoint\":{\"port\":443}}\n";
         let e = parse_logs(t, "x");
         assert_eq!(e.len(), 2);
-        assert_eq!((e[0].action, e[0].host.as_str(), e[0].binary.as_deref()), (Action::Denied, "1.2.3.4", Some("/usr/bin/git")));
-        assert_eq!((e[1].action, e[1].class, e[1].host.as_str()), (Action::Allowed, "http", "h.example"));
+        assert_eq!(
+            (e[0].action, e[0].host.as_str(), e[0].binary.as_deref()),
+            (Action::Denied, "1.2.3.4", Some("/usr/bin/git"))
+        );
+        assert_eq!(
+            (e[1].action, e[1].class, e[1].host.as_str()),
+            (Action::Allowed, "http", "h.example")
+        );
     }
 
     #[test]
     fn git_helpers_match_their_parent_binary() {
-        assert!(bin_matches("/usr/bin/git", "/usr/lib/git-core/git-remote-http"));
-        assert!(!bin_matches("/usr/bin/curl", "/usr/lib/git-core/git-remote-http"));
+        assert!(bin_matches(
+            "/usr/bin/git",
+            "/usr/lib/git-core/git-remote-http"
+        ));
+        assert!(!bin_matches(
+            "/usr/bin/curl",
+            "/usr/lib/git-core/git-remote-http"
+        ));
         assert!(!bin_matches("/usr/bin/git", "/usr/bin/curl"));
     }
 
