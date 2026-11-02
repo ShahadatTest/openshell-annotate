@@ -1,14 +1,11 @@
 # syntax=docker/dockerfile:1.7
-# Local build (not published):  scripts/docker-build.sh
+# Build:  scripts/docker-build.sh   (or: docker build -t openshell-annotate:dev .)
 #
-# Cargo.toml pins `openshell-policy-schema` to a git checkout of OpenShell at /path/to/OpenShell
-# (file:// URL, tag v0.1.6). The build therefore needs that checkout as the named build context `openshell`.
+# `openshell-policy-schema` is a git dependency on https://github.com/NVIDIA/OpenShell (tag v0.1.6, commit pinned
+# in Cargo.lock), fetched by cargo during the build, so no local OpenShell checkout is needed.
 FROM rust:1.94-bookworm AS build
-ARG OPENSHELL_PATH=/path/to/OpenShell
 WORKDIR /build
 # Tree-sitter grammars are C sources compiled by cargo's build scripts (gcc is in the rust image).
-COPY --from=openshell / ${OPENSHELL_PATH}
-RUN git config --global --add safe.directory '*'
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 RUN --mount=type=cache,target=/usr/local/cargo/registry \

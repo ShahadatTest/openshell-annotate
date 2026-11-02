@@ -567,7 +567,7 @@ dependencies = [
 [[package]]
 name = "openshell-policy-schema"
 version = "0.0.0"
-source = "git+file:///path/to/OpenShell?tag=v0.1.6#ac7f615cd12d5cc49cb16eb1f5f10ffeb1e90f47"
+source = "git+https://github.com/NVIDIA/OpenShell?tag=v0.1.6#ac7f615cd12d5cc49cb16eb1f5f10ffeb1e90f47"
 dependencies = [
  "miette",
  "noyalib",
