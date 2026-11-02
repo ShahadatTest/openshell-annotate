@@ -19,8 +19,7 @@ subprocesses; add directives with reasons; run `scan`, `generate`, `lint`, `drif
   `--credential KEY` form so values come from the caller's environment.
 - Add a test for every new directive, attribute, lint pattern or error message. Fixtures live in
   `tests/fixtures/sample`; the golden `policy.expected.yaml` is intentionally reviewed by hand when it changes.
-- Do not push, fork or open PRs from this repo unless the owner says so.
 - Lint call-site detection lives in `src/ast.rs` (tree-sitter: one handler per language) and `src/lint.rs` (coverage, fs path
   policy, summaries); the regex engine is kept behind `[lint] engine = "regex"`. New patterns need a case in
-  `tests/cli.rs` and in the fixtures repo (`~/src/openshell-annotate-fixtures`, `./run-tests.sh [--sandbox]`).
+  `tests/cli.rs` and in a fixtures repo for sandbox-backed checks.
 - `diff-logs` (`src/diff_logs.rs`) parses shorthand and OCSF JSON; keep both formats in `tests/fixtures/logs`.

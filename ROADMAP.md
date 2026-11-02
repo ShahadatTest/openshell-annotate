@@ -1,11 +1,11 @@
 # openshell-annotate roadmap
 
-Order matters: each milestone builds on the previous one. All work stays local (no remote, nothing pushed) until Ilan approves.
+Order matters: each milestone builds on the previous one. Nothing is published (no releases, no registry images) until the maintainer decides to.
 
 | # | Milestone | Status |
 |---|---|---|
 | 1 | Auto-generated docs | done 2026-11-01 |
-| 2 | Docker image | local build done 2026-11-01 (openshell-annotate:dev, 34.9 MB); registry publish pending Ilan's approval |
+| 2 | Docker image | image builds from the public repo (openshell-annotate:dev, ~35 MB); registry publish pending |
 | 3 | GitHub Action + GitLab CI template | next |
 | 4 | AI agent skill hardening and testing | blocked on logins |
 | 5 | VS Code extension | last |
@@ -17,8 +17,8 @@ Order matters: each milestone builds on the previous one. All work stays local (
 
 ## 2. Docker image (publish)
 - **Scope:** small runtime image with the binary (tree-sitter grammars compiled in; distroless/cc base, 34.9 MB), entrypoint `openshell-annotate`, workdir `/src`.
-- **Deliverables:** multi-stage `Dockerfile`, `scripts/docker-build.sh` (local tag `openshell-annotate:dev`), then, after approval, a publish workflow to a registry (ghcr.io) with version tags.
-- **Depends on:** a public home for the repo and a resolvable dependency on `openshell-policy-schema` (today a `file://` git path to a local OpenShell checkout; the image build passes the checkout as a named build context). Publishing needs Ilan's approval and a remote.
+- **Deliverables:** multi-stage `Dockerfile`, `scripts/docker-build.sh` (local tag `openshell-annotate:dev`, no OpenShell checkout needed), then, after approval, a publish workflow to a registry (ghcr.io) with version tags.
+- **Depends on:** a public home for the repo (the `openshell-policy-schema` dependency now resolves from the public OpenShell repo at tag v0.1.6, so the build is portable). Publishing to a registry needs the maintainer's approval.
 
 ## 3. GitHub Action + GitLab CI template
 - **Scope:** run `lint --deny-warnings` and `drift --policy openshell/policy.yaml` on every pull/merge request; fail with annotations.
@@ -27,8 +27,8 @@ Order matters: each milestone builds on the previous one. All work stays local (
 
 ## 4. AI agent skill hardening and testing
 - **Scope:** make `skills/annotate-openshell-policy/SKILL.md` reliable for Claude Code and Cursor: scan code, add directives, loop on `lint` until clean.
-- **Deliverables:** skill reads the generated `docs/DIRECTIVES.md` instead of duplicating grammar; an eval script that runs the agent on `annotate-demo` and the fixtures and scores `lint`/`drift` results; install instructions for each agent (`AGENTS.md`, Claude skill dir, Cursor rules).
-- **Depends on:** (1) docs. **Blockers:** `claude` login on the dev server has expired (needs `claude` then `/login`); `cursor-agent` is not installed.
+- **Deliverables:** skill reads the generated `docs/DIRECTIVES.md` instead of duplicating grammar; an eval script that runs the agent on a demo repo and the fixtures and scores `lint`/`drift` results; install instructions for each agent (`AGENTS.md`, Claude skill dir, Cursor rules).
+- **Depends on:** (1) docs. **Blockers:** needs working `claude` and `cursor-agent` logins for the agent evals.
 
 ## 5. VS Code extension
 - **Scope:** editor support for directives.

@@ -5,8 +5,21 @@ structured comments next to the code that needs access; the CLI scans the repo a
 (every entry commented with its reason and `file:line`) plus a separate providers file, lints for
 un-annotated calls, and gates CI on drift.
 
-Status: local prototype (M0 + core of M1 + a heuristic linter). Targets OpenShell policy schema v1
-(`openshell-policy-schema` @ v0.1.6). Not published.
+> **Independent community project.** openshell-annotate is not affiliated with, endorsed by, or sponsored by
+> NVIDIA. It uses NVIDIA OpenShell's public policy schema crate (Apache-2.0) to validate what it generates.
+
+Status: early prototype (version 0.1.0, no releases yet). Targets OpenShell policy schema v1
+(`openshell-policy-schema` @ v0.1.6). Licensed under Apache-2.0.
+
+## Install
+
+Prebuilt binaries are not published yet. Build from source (Rust 1.94+ and a C compiler, because the tree-sitter
+grammars are C code; the OpenShell schema crate is fetched from GitHub by cargo):
+
+```
+git clone https://github.com/ilanh/openshell-annotate && cd openshell-annotate
+cargo build --release --locked        # binary: target/release/openshell-annotate
+```
 
 ```ts
 // @openshell egress api.openai.com:443 reason="LLM calls" access=read-write
@@ -108,14 +121,18 @@ exclude = []               # same pattern syntax as [lint].exclude
 ## Develop
 
 ```
+cargo fmt --check && cargo clippy --all-targets -- -D warnings
 cargo test
+scripts/gen-docs.sh --check                  # docs/CLI.md and docs/DIRECTIVES.md are generated from the code
 ```
+
+Contributions need a DCO sign-off, see [CONTRIBUTING.md](CONTRIBUTING.md). Security reports: [SECURITY.md](SECURITY.md).
 
 ## Docker (local build)
 
 ```
-scripts/docker-build.sh                      # builds openshell-annotate:dev (~35 MB, distroless/cc, never pushed)
+scripts/docker-build.sh                      # builds openshell-annotate:dev (~35 MB, distroless/cc; not published)
 docker run --rm -u $(id -u):$(id -g) -v "$PWD":/src openshell-annotate:dev lint
 docker run --rm -v "$PWD":/src openshell-annotate:dev scan
 ```
-Entrypoint is `openshell-annotate`, workdir `/src`. The build needs the OpenShell checkout (`OPENSHELL_SRC`, default `~/src/OpenShell`) for `openshell-policy-schema`.
+Entrypoint is `openshell-annotate`, workdir `/src`. The build needs network access to fetch crates and the OpenShell schema crate from GitHub.
