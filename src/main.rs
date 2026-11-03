@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
-use openshell_annotate::config::Config;
+use openshell_annotate::config::{Config, CONFIG_FILE};
 use openshell_annotate::directive::Directive;
 use openshell_annotate::drift;
 use openshell_annotate::generate::{self, miette_str};
@@ -189,7 +189,12 @@ fn load_profiles(cfg: &Config, cli_dir: Option<&Path>, root: &Path) -> Result<Ve
     }
     let mut out = Vec::new();
     for d in dirs {
-        out.extend(providers::load_profiles(&d)?);
+        out.extend(providers::load_profiles(&d).with_context(|| {
+            format!(
+                "loading [providers] profiles_dirs/profiles_dir entry {} (from {CONFIG_FILE})",
+                d.display()
+            )
+        })?);
     }
     Ok(out)
 }

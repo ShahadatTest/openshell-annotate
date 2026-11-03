@@ -21,8 +21,21 @@ pub struct Profile {
 
 pub fn load_profiles(dir: &Path) -> Result<Vec<Profile>> {
     let mut out = Vec::new();
-    let rd = std::fs::read_dir(dir)
-        .with_context(|| format!("reading profiles dir {}", dir.display()))?;
+    let rd = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            anyhow::bail!(
+                "profiles directory {} does not exist\n\
+                 hint: set `[providers] profiles_dir` / `profiles_dirs` in {config} to a real \
+                 directory (create it, fix the path, or clone OpenShell)",
+                dir.display(),
+                config = crate::config::CONFIG_FILE,
+            );
+        }
+        Err(e) => {
+            return Err(e).with_context(|| format!("reading profiles dir {}", dir.display()));
+        }
+    };
     let mut paths: Vec<PathBuf> = rd
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| matches!(p.extension().and_then(|e| e.to_str()), Some("yaml" | "yml")))

@@ -913,6 +913,35 @@ fn lint_ast_follows_fs_imports_and_aliases() {
 }
 
 #[test]
+fn missing_profiles_dirs_entry_names_the_config_key() {
+    let t = fixture();
+    let toml = std::fs::read_to_string(t.path().join("openshell-annotate.toml")).unwrap();
+    std::fs::write(
+        t.path().join("openshell-annotate.toml"),
+        toml.replace(
+            "profiles_dir = \"profiles\"",
+            "profiles_dirs = [\"../OpenShell/providers\"]",
+        ),
+    )
+    .unwrap();
+    let o = run(t.path(), &["generate", "-o", "policy.yaml"]);
+    assert!(!o.status.success(), "missing profiles dir must fail");
+    let s = err(&o);
+    assert!(
+        s.contains("profiles_dirs") || s.contains("profiles_dir") || s.contains("openshell-annotate.toml"),
+        "error should name the config key/file: {s}"
+    );
+    assert!(
+        s.contains("does not exist") || s.contains("No such file"),
+        "error should say the directory is missing: {s}"
+    );
+    assert!(
+        s.to_lowercase().contains("hint") || s.contains("clone OpenShell") || s.contains("fix the path"),
+        "error should hint how to fix: {s}"
+    );
+}
+
+#[test]
 fn profiles_dirs_lists_several_directories_and_profiles_dir_still_works() {
     let t = fixture();
     let base = out(&run(
